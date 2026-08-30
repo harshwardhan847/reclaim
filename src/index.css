@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  :root {
+    /* Base red and black theme for Reclaim */
+    --background: 0 0% 3%;
+    --foreground: 0 0% 95%;
+    
+    /* Glassmorphism cards */
+    --card: 0 0% 8% / 0.7; 
+    --card-foreground: 0 0% 98%;
+    
+    --popover: 0 0% 6%;
+    --popover-foreground: 0 0% 98%;
+    
+    /* Vibrant Red primary */
+    --primary: 348 83% 47%;
+    --primary-foreground: 0 0% 100%;
+    
+    /* Dark secondary */
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 98%;
+    
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 60%;
+    
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 98%;
+    
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    
+    --border: 0 0% 15%;
+    --input: 0 0% 15%;
+    --ring: 348 83% 47%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    background: radial-gradient(circle at top right, rgba(180, 20, 40, 0.15), transparent 40%),
+                radial-gradient(circle at bottom left, rgba(255, 0, 50, 0.05), transparent 40%),
+                #080808;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+}
+
+/* Custom utility for glassmorphism */
+@layer utilities {
+  .glass {
+    @apply bg-card backdrop-blur-xl border border-white/5 shadow-xl;
+  }
+}
