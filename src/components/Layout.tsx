@@ -1,43 +1,99 @@
 import type { ReactNode } from 'react'
 import { LayoutDashboard, ListTree, List, Settings, Trash2 } from 'lucide-react'
 
-export function Layout({ children }: { children: ReactNode }) {
+export function Layout({ 
+  children, 
+  activeTab, 
+  onTabChange,
+  hasScanned
+}: { 
+  children: ReactNode;
+  activeTab: string;
+  onTabChange: (tab: string) => void;
+  hasScanned: boolean;
+}) {
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background text-foreground relative">
-      
+    <div className="flex h-screen bg-black text-white font-sans overflow-hidden">
       {/* Background gradients */}
-      <div className="absolute inset-0 z-0 pointer-events-none">
-        <div className="absolute top-[-10%] right-[-5%] w-[40%] h-[40%] bg-primary/20 rounded-full blur-[120px]" />
-        <div className="absolute bottom-[-10%] left-[-10%] w-[50%] h-[50%] bg-red-900/10 rounded-full blur-[100px]" />
+      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-primary/20 blur-[120px] rounded-full mix-blend-screen" />
+        <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-red-900/20 blur-[150px] rounded-full mix-blend-screen" />
       </div>
 
       {/* Sidebar */}
       <aside className="w-64 h-full glass border-r border-white/5 flex flex-col relative z-10 pt-14">
-        <div className="px-6 py-4 flex items-center space-x-3" data-tauri-drag-region>
+        <div 
+          className="px-6 py-4 flex items-center space-x-3 cursor-grab active:cursor-grabbing" 
+          data-tauri-drag-region="true"
+        >
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-red-900 flex items-center justify-center shadow-lg shadow-primary/20 pointer-events-none">
-            <span className="text-white font-bold text-sm">R</span>
+            <span className="text-white font-bold text-sm pointer-events-none">R</span>
           </div>
           <span className="font-bold tracking-wider text-lg pointer-events-none">Reclaim</span>
         </div>
 
-        <nav className="flex-1 px-4 py-6 space-y-2">
-          <NavItem icon={<LayoutDashboard size={20} />} label="Overview" active />
-          <NavItem icon={<ListTree size={20} />} label="Treemap" />
-          <NavItem icon={<List size={20} />} label="List View" />
-          <NavItem icon={<Trash2 size={20} />} label="Clean Junk" />
+        <nav className="flex-1 px-4 py-4 overflow-y-auto custom-scrollbar relative z-20 pointer-events-auto">
+          <div className="mb-6">
+            <h3 className="px-3 text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-2">Dashboard</h3>
+            <div className="space-y-1">
+              <NavItem 
+                icon={<LayoutDashboard size={18} />} 
+                label="Space Overview" 
+                active={activeTab === 'overview'} 
+                onClick={() => onTabChange('overview')}
+              />
+              <NavItem 
+                icon={<ListTree size={18} />} 
+                label="Disk Explorer" 
+                active={activeTab === 'list'}
+                onClick={() => onTabChange('list')}
+                disabled={!hasScanned}
+              />
+            </div>
+          </div>
+          
+          <div className="mb-6">
+            <h3 className="px-3 text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-2">Smart Clean</h3>
+            <div className="space-y-1">
+              <NavItem 
+                icon={<List size={18} />} 
+                label="Large Files" 
+                active={activeTab === 'large_files'}
+                onClick={() => onTabChange('large_files')}
+                disabled={!hasScanned}
+              />
+              <NavItem 
+                icon={<Settings size={18} />} 
+                label="AI Cache & Logs" 
+                active={activeTab === 'ai_cache'}
+                onClick={() => onTabChange('ai_cache')}
+                disabled={!hasScanned}
+              />
+              <NavItem 
+                icon={<Trash2 size={18} />} 
+                label="App Leftovers" 
+                active={activeTab === 'leftovers'}
+                onClick={() => onTabChange('leftovers')}
+                disabled={!hasScanned}
+              />
+            </div>
+          </div>
         </nav>
 
-        <div className="p-4 mt-auto">
-          <NavItem icon={<Settings size={20} />} label="Settings" />
+        <div className="p-4 mt-auto relative z-20 pointer-events-auto">
+          <NavItem icon={<Settings size={20} />} label="Settings" active={activeTab === 'settings'} onClick={() => onTabChange('settings')} />
         </div>
       </aside>
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col relative z-10 h-full overflow-hidden">
         {/* Top titlebar drag region for macOS */}
-        <div data-tauri-drag-region className="h-10 w-full absolute top-0 left-0 z-50 cursor-grab" />
+        <div 
+          data-tauri-drag-region="true"
+          className="h-10 w-full shrink-0 cursor-grab active:cursor-grabbing" 
+        />
         
-        <div className="flex-1 overflow-y-auto p-8 pt-12">
+        <div className="flex-1 overflow-y-auto p-8 relative z-0">
           {children}
         </div>
       </main>
@@ -45,17 +101,32 @@ export function Layout({ children }: { children: ReactNode }) {
   )
 }
 
-function NavItem({ icon, label, active = false }: { icon: ReactNode, label: string, active?: boolean }) {
+function NavItem({ 
+  icon, 
+  label, 
+  active = false,
+  disabled = false,
+  onClick 
+}: { 
+  icon: ReactNode; 
+  label: string; 
+  active?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
   return (
     <button 
-      className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200
-      ${active 
-        ? 'bg-primary/10 text-primary border border-primary/20 shadow-[0_0_15px_rgba(220,38,38,0.1)]' 
-        : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
-      }`}
+      type="button"
+      onClick={() => {
+        if (!disabled && onClick) onClick();
+      }}
+      disabled={disabled}
+      className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-200 group text-left ${active ? 'bg-primary/20 text-white shadow-inner shadow-primary/10' : 'text-gray-400 hover:text-white hover:bg-white/5'} ${disabled ? 'opacity-30 cursor-not-allowed hover:bg-transparent hover:text-gray-400' : ''}`}
     >
-      {icon}
-      <span className="font-medium text-sm">{label}</span>
+      <div className={`transition-transform duration-200 ${active ? 'text-primary scale-110' : 'group-hover:scale-110'}`}>
+        {icon}
+      </div>
+      <span className="font-medium text-sm flex-1">{label}</span>
     </button>
   )
 }

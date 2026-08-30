@@ -1,9 +1,10 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use jwalk::WalkDirGeneric;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tauri::Emitter;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ScanNode {
@@ -14,46 +15,143 @@ struct ScanNode {
 }
 
 #[tauri::command]
-fn scan_path(path: String) -> Result<ScanNode, String> {
-    // This is a simplified version of the scanning logic
-    // For a real app, this should be async, handle APFS clones, and use events to report progress
-    let mut total_size = 0;
-    
-    // Simplistic mock response to get the UI wired up quickly
-    // jwalk could be used here to build the actual tree
-    
-    // In this basic version we will just return a mocked tree for the UI testing
-    Ok(ScanNode {
+async fn scan_path(window: tauri::Window, path: String) -> Result<ScanNode, String> {
+    let mut root_node = ScanNode {
         path: path.clone(),
-        name: Path::new(&path).file_name().unwrap_or_default().to_string_lossy().to_string(),
-        size: 15_000_000_000,
-        children: Some(vec![
-            ScanNode {
-                path: format!("{}/Apps", path),
-                name: "Apps".to_string(),
-                size: 8_000_000_000,
-                children: None,
-            },
-            ScanNode {
-                path: format!("{}/Documents", path),
-                name: "Documents".to_string(),
-                size: 5_000_000_000,
-                children: None,
-            },
-            ScanNode {
-                path: format!("{}/Media", path),
-                name: "Media".to_string(),
-                size: 2_000_000_000,
-                children: None,
-            },
-        ])
-    })
+        name: Path::new(&path).file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        size: 0,
+        children: Some(Vec::new()),
+    };
+
+    let mut path_sizes: HashMap<PathBuf, u64> = HashMap::new();
+    let mut dir_children: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    let mut total_scanned_bytes = 0u64;
+    let mut total_files = 0u32;
+    
+    for entry in jwalk::WalkDir::new(&path).skip_hidden(false) {
+        if let Ok(entry) = entry {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            
+            let parent = entry.path().parent().map(|p| p.to_path_buf());
+            let current = entry.path();
+            
+            if entry.file_type().is_file() {
+                path_sizes.insert(current.clone(), size);
+                total_scanned_bytes += size;
+                total_files += 1;
+            }
+            
+            if let Some(parent_path) = parent {
+                dir_children.entry(parent_path).or_default().push(current.clone());
+            }
+
+            // Emit progress every 1000 files to avoid spamming the UI thread
+            if total_files % 1000 == 0 {
+                let _ = window.emit("scan_progress", total_scanned_bytes);
+            }
+        }
+    }
+    
+    // Final progress emit
+    let _ = window.emit("scan_progress", total_scanned_bytes);
+
+    // Now recursively build the tree
+    fn build_tree(current: &Path, sizes: &HashMap<PathBuf, u64>, children_map: &HashMap<PathBuf, Vec<PathBuf>>) -> ScanNode {
+        let name = current.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let path_str = current.to_string_lossy().into_owned();
+        
+        let mut node = ScanNode {
+            path: path_str,
+            name,
+            size: 0,
+            children: None,
+        };
+
+        if let Some(children) = children_map.get(current) {
+            let mut child_nodes = Vec::new();
+            let mut total_size = 0;
+            
+            for child in children {
+                let child_node = build_tree(child, sizes, children_map);
+                total_size += child_node.size;
+                child_nodes.push(child_node);
+            }
+            
+            node.size = total_size;
+            node.children = Some(child_nodes);
+        } else {
+            node.size = *sizes.get(current).unwrap_or(&0);
+        }
+        
+        node
+    }
+    
+    let tree = build_tree(Path::new(&path), &path_sizes, &dir_children);
+    Ok(tree)
+}
+
+#[tauri::command]
+fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
+    for path in paths {
+        if let Err(e) = trash::delete(&path) {
+            eprintln!("Failed to move to trash: {} - {}", path, e);
+            return Err(e.to_string());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_installed_apps() -> Result<Vec<String>, String> {
+    let mut apps = Vec::new();
+    let dirs_to_check = vec![
+        "/Applications",
+        "/System/Applications",
+    ];
+
+    for dir in dirs_to_check {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type() {
+                    if file_type.is_dir() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.ends_with(".app") {
+                            apps.push(name.replace(".app", "").to_lowercase());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Also check user's Applications folder
+    if let Some(mut home_dir) = dirs::home_dir() {
+        home_dir.push("Applications");
+        if let Ok(entries) = std::fs::read_dir(home_dir) {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type() {
+                    if file_type.is_dir() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.ends_with(".app") {
+                            apps.push(name.replace(".app", "").to_lowercase());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(apps)
 }
 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![scan_path])
+        .invoke_handler(tauri::generate_handler![
+            scan_path, 
+            move_to_trash,
+            get_installed_apps
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
