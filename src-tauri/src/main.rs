@@ -201,13 +201,100 @@ fn get_installed_apps() -> Result<Vec<String>, String> {
     Ok(apps)
 }
 
+#[tauri::command]
+async fn find_true_duplicates(size_groups: Vec<Vec<String>>) -> Result<Vec<Vec<String>>, String> {
+    use xxhash_rust::xxh3::xxh3_64;
+    use std::fs::read;
+
+    let mut true_duplicates = Vec::new();
+
+    // Iterate over each group of files that share the exact same byte size
+    for group in size_groups {
+        let mut hash_map: HashMap<u64, Vec<String>> = HashMap::new();
+
+        // Hash each file in the group
+        for path in group {
+            if let Ok(contents) = read(&path) {
+                let hash = xxh3_64(&contents);
+                hash_map.entry(hash).or_default().push(path);
+            }
+        }
+
+        // If multiple files have the exact same hash, they are true duplicates
+        for (_, paths) in hash_map {
+            if paths.len() > 1 {
+                true_duplicates.push(paths);
+            }
+        }
+    }
+
+    Ok(true_duplicates)
+}
+
+fn get_cache_path() -> Option<PathBuf> {
+    dirs::cache_dir().map(|mut p| {
+        p.push("com.reclaim.app");
+        std::fs::create_dir_all(&p).ok();
+        p.push("latest_scan.json");
+        p
+    })
+}
+
+#[tauri::command]
+fn get_scan_cache() -> Result<Option<ScanNode>, String> {
+    if let Some(cache_path) = get_cache_path() {
+        if cache_path.exists() {
+            if let Ok(file) = std::fs::File::open(cache_path) {
+                if let Ok(node) = serde_json::from_reader(file) {
+                    return Ok(Some(node));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+#[tauri::command]
+fn check_fda_status() -> bool {
+    if let Some(mut path) = dirs::home_dir() {
+        // TCC.db is strictly protected by macOS Full Disk Access
+        path.push("Library/Application Support/com.apple.TCC/TCC.db");
+        match std::fs::metadata(&path) {
+            Ok(_) => true,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    false
+                } else {
+                    // If it doesn't exist or another error, we assume false to be safe, 
+                    // though on modern macOS it should always exist.
+                    false
+                }
+            }
+        }
+    } else {
+        true
+    }
+}
+
+#[tauri::command]
+fn open_fda_settings() {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        .spawn()
+        .ok();
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             scan_path, 
             move_to_trash,
-            get_installed_apps
+            get_installed_apps,
+            find_true_duplicates,
+            get_scan_cache,
+            check_fda_status,
+            open_fda_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

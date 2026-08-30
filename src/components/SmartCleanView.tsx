@@ -112,7 +112,7 @@ export function SmartCleanView({ title, description, items, onDelete, icon }: Sm
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((file) => (
+            {items.slice(0, 300).map((file) => (
               <TableRow 
                 key={file.path}
                 className="group border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none"

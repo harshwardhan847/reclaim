@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { LayoutDashboard, ListTree, List, Settings, Trash2 } from 'lucide-react'
+import { LayoutDashboard, ListTree, List, Settings, Trash2, Copy } from 'lucide-react'
 
 export function Layout({ 
   children, 
@@ -55,6 +55,13 @@ export function Layout({
           <div className="mb-6">
             <h3 className="px-3 text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-2">Smart Clean</h3>
             <div className="space-y-1">
+              <NavItem 
+                icon={<Copy size={18} />} 
+                label="Duplicates" 
+                active={activeTab === 'duplicates'}
+                onClick={() => onTabChange('duplicates')}
+                disabled={!hasScanned}
+              />
               <NavItem 
                 icon={<List size={18} />} 
                 label="Large Files" 

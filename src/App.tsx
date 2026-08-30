@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, startTransition } from 'react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -8,7 +8,10 @@ import { FileListView } from '@/components/FileListView'
 import { SmartCleanView } from '@/components/SmartCleanView'
 import { SettingsView } from '@/components/SettingsView'
 import { FileAnalyticsView } from '@/components/FileAnalyticsView'
-import { Trash2, AlertCircle, X, HardDrive, Cpu, AppWindow } from 'lucide-react'
+import { DuplicateView } from '@/components/DuplicateView'
+import { SearchOverlay } from '@/components/SearchOverlay'
+import { FdaModal } from '@/components/FdaModal'
+import { Trash2, AlertCircle, X, HardDrive, Cpu, AppWindow, Search, RefreshCw } from 'lucide-react'
 
 function App() {
   const [scanning, setScanning] = useState(false)
@@ -18,12 +21,34 @@ function App() {
   const [stagedDeletes, setStagedDeletes] = useState<ScanNode[]>([])
   const [isTrashOpen, setIsTrashOpen] = useState(false)
   const [installedApps, setInstalledApps] = useState<string[]>([])
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+
+  // Listen for Cmd+K globally
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setIsSearchOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   useEffect(() => {
     // Fetch installed apps on mount
-    invoke<string[]>('get_installed_apps').then(apps => {
-      setInstalledApps(apps)
-    }).catch(err => console.error("Failed to fetch installed apps:", err))
+    invoke<string[]>('get_installed_apps')
+      .then(apps => setInstalledApps(apps))
+      .catch(console.error)
+      
+    // Try to load cached scan tree instantly
+    invoke<ScanNode | null>('get_scan_cache')
+      .then(cached => {
+        if (cached) {
+          setScanResult(cached)
+        }
+      })
+      .catch(console.error)
 
     const unlisten = listen<number>('scan_progress', (event) => {
       setScannedBytes(event.payload)
@@ -155,16 +180,45 @@ function App() {
   const formattedStagedSize = (totalStagedSize / 1e9).toFixed(2) + ' GB'
 
   return (
-    <Layout activeTab={activeTab} onTabChange={(tab) => {
-      console.log('Tab clicked:', tab);
-      setActiveTab(tab);
-    }} hasScanned={!!scanResult}>
-      <div className="flex flex-col h-full relative">
-        <header className="flex items-center justify-between mb-8 z-10 hidden">
-          {/* Header tabs replaced by sidebar */}
+    <>
+      <FdaModal />
+      <Layout activeTab={activeTab} onTabChange={(tab) => {
+        startTransition(() => {
+          setActiveTab(tab);
+        });
+      }} hasScanned={!!scanResult}>
+        <div className="flex flex-col h-full relative">
+        <header className="absolute top-0 right-8 z-50 flex items-center h-10 mt-2 space-x-3">
+          {scanResult && (
+            <>
+              <button 
+                onClick={handleScan}
+                className="flex items-center space-x-2 text-neutral-400 hover:text-white bg-black/40 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/5 transition-all text-sm backdrop-blur-md"
+                title="Rescan Drive"
+              >
+                <RefreshCw size={16} className={scanning ? 'animate-spin text-primary' : ''} />
+                <span>{scanning ? 'Scanning...' : 'Rescan'}</span>
+              </button>
+              <button 
+                onClick={() => setIsSearchOpen(true)}
+                className="flex items-center space-x-2 text-neutral-400 hover:text-white bg-black/40 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/5 transition-all text-sm backdrop-blur-md"
+              >
+                <Search size={16} />
+                <span>Search</span>
+                <kbd className="ml-2 font-sans bg-white/10 px-1.5 rounded text-[10px]">⌘K</kbd>
+              </button>
+            </>
+          )}
         </header>
 
-        <div className="flex-1 relative z-10 flex flex-col min-h-0 overflow-hidden">
+        <SearchOverlay 
+          data={scanResult} 
+          isOpen={isSearchOpen} 
+          onClose={() => setIsSearchOpen(false)} 
+          onDelete={(path) => handleSmartDelete([path])}
+        />
+
+        <div className="flex-1 relative z-10 flex flex-col min-h-0 overflow-hidden pt-12">
           {!scanResult && !scanning && activeTab !== 'settings' && (
             <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-white/10 rounded-2xl bg-black/20 backdrop-blur-sm">
               <div className="w-24 h-24 mb-6 rounded-full bg-gradient-to-br from-primary/20 to-red-900/40 flex items-center justify-center">
@@ -228,6 +282,15 @@ function App() {
               </div>
 
               {/* Smart Clean Views */}
+              {activeTab === 'duplicates' && (
+                <div className="flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4">
+                  <DuplicateView 
+                    scanResult={scanResult}
+                    onDelete={handleSmartDelete}
+                  />
+                </div>
+              )}
+
               {activeTab === 'large_files' && (
                 <div className="flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4">
                   <SmartCleanView 
@@ -354,6 +417,7 @@ function App() {
         )}
       </div>
     </Layout>
+    </>
   )
 }
 
