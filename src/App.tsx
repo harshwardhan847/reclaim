@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, startTransition } from 'react'
+import { useState, useEffect, useCallback, useRef, startTransition } from 'react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -14,7 +14,15 @@ import { FdaModal } from '@/components/FdaModal'
 import { DevCleanupView } from '@/components/DevCleanupView'
 import { SystemInfoView } from '@/components/SystemInfoView'
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
-import { Trash2, Loader2, AlertCircle, X, HardDrive, AppWindow, Search, RefreshCw } from 'lucide-react'
+import { Trash2, AlertCircle, X, HardDrive, AppWindow, Search, RefreshCw } from 'lucide-react'
+
+interface ScanSummary {
+  tree: ScanNode
+  largeFilesSize: number
+  aiCacheSize: number
+}
+
+const LARGE_FILE_MIN_SIZE = 100 * 1024 * 1024
 
 function App() {
   const [scanning, setScanning] = useState(false)
@@ -24,18 +32,24 @@ function App() {
   const [stagedDeletes, setStagedDeletes] = useState<ScanNode[]>([])
   const [isTrashOpen, setIsTrashOpen] = useState(false)
   const [installedApps, setInstalledApps] = useState<string[]>([])
+  const [installedAppsLoaded, setInstalledAppsLoaded] = useState(false)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<{ paths: string[], size: number } | null>(null)
   const [isInitializing, setIsInitializing] = useState(true)
-  const [isProcessing, setIsProcessing] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
-  const [derivedData, setDerivedData] = useState<{
-    flatFiles: ScanNode[];
-    largeFiles: ScanNode[];
-    aiCaches: ScanNode[];
-    leftoverData: ScanNode[];
-  }>({ flatFiles: [], largeFiles: [], aiCaches: [], leftoverData: [] })
   const [scanTarget, setScanTarget] = useState<string>('/Users/harshwardhan')
+
+  // Badges we get for free from the scan itself (no tab needs to be opened
+  // for these to be accurate).
+  const [scanBadges, setScanBadges] = useState({ largeFilesSize: 0, aiCacheSize: 0 })
+  const [duplicatesWastedSize, setDuplicatesWastedSize] = useState(0)
+
+  // Each of these is fetched lazily, once, the first time its tab is opened
+  // -- not eagerly derived from the whole tree on every scan.
+  const [largeFiles, setLargeFiles] = useState<ScanNode[] | null>(null)
+  const [aiCaches, setAiCaches] = useState<ScanNode[] | null>(null)
+  const [leftoverData, setLeftoverData] = useState<ScanNode[] | null>(null)
+  const fetchedTabs = useRef<Set<string>>(new Set())
 
   // Listen for Cmd+K globally
   useEffect(() => {
@@ -54,7 +68,8 @@ function App() {
     invoke<string[]>('get_installed_apps')
       .then(apps => setInstalledApps(apps))
       .catch(console.error)
-      
+      .finally(() => setInstalledAppsLoaded(true))
+
     setIsInitializing(false)
 
     const unlisten = listen<number>('scan_progress', (event) => {
@@ -65,74 +80,46 @@ function App() {
     }
   }, [])
 
-  // Async Data Processing (Prevents UI Freeze)
+  // Fetch whichever smart-clean list the active tab needs, once, the first
+  // time it's opened after a scan. Everything here reads from the scan
+  // index Rust already cached server-side -- no re-walk, no flattening a
+  // multi-million-node tree in JS.
   useEffect(() => {
     if (!scanResult) return
-    setIsProcessing(true)
-    
-    // Yield to the browser paint cycle so the "Processing" skeleton can render
-    setTimeout(() => {
-      const flat: ScanNode[] = []
-      const traverse = (node: ScanNode) => {
-        if (!node.children) {
-          flat.push(node)
-        } else {
-          node.children.forEach(traverse)
-        }
-      }
-      traverse(scanResult)
+    if (fetchedTabs.current.has(activeTab)) return
 
-      const large = flat
-        .filter(f => f.size > 100 * 1024 * 1024)
-        .sort((a, b) => b.size - a.size)
-
-      const ai = flat
-        .filter(f => {
-          const lower = f.path.toLowerCase()
-          const isCacheDir = lower.includes('/.cache/') || lower.includes('/library/caches/') || 
-                             lower.includes('/library/application support/') || lower.includes('/.config/') ||
-                             lower.includes('/.local/share/') || lower.match(/\/\.[a-z0-9_-]+$/)
-          if (!isCacheDir) return false
-          
-          return lower.includes('/huggingface') || lower.includes('/lm-studio') ||
-                 lower.includes('/ollama') || lower.includes('/comfyui') ||
-                 lower.includes('/cursor') || lower.includes('/github-copilot') ||
-                 lower.includes('/.gemini') || lower.includes('/antigravity') ||
-                 lower.includes('/claude') || lower.includes('/anthropic') ||
-                 lower.includes('/chatgpt') || lower.includes('/openai') ||
-                 lower.includes('/codeium') || lower.includes('/tabnine') ||
-                 lower.includes('/continue') || lower.includes('/cody') ||
-                 lower.includes('/sourcegraph') || lower.includes('/windsurf') ||
-                 lower.includes('/aider') || lower.includes('/torch') ||
-                 lower.includes('/tensorflow') || lower.includes('/.keras') ||
-                 lower.includes('/conda') || lower.includes('/miniconda') ||
-                 lower.includes('/pip') || lower.includes('/jupyter')
-        })
-        .sort((a, b) => b.size - a.size)
-
-      const leftovers = flat
-        .filter(f => {
-          if (f.path.toLowerCase().includes('/com.apple.')) return false
-          if (!f.path.includes('Library/Application Support') && !f.path.includes('Library/Caches')) return false
-          const parts = f.path.split('/')
-          const appName = parts.find(p => p.includes('.app') || p.includes('com.'))
-          if (!appName) return false
-          return !installedApps.some(app => app.toLowerCase().includes(appName.toLowerCase()))
-        })
-        .sort((a, b) => b.size - a.size)
-
-      setDerivedData({ flatFiles: flat, largeFiles: large, aiCaches: ai, leftoverData: leftovers })
-      setIsProcessing(false)
-    }, 50)
-  }, [scanResult, installedApps])
-  
-  const { flatFiles, largeFiles, aiCaches, leftoverData } = derivedData
+    if (activeTab === 'large_files') {
+      fetchedTabs.current.add(activeTab)
+      invoke<ScanNode[]>('get_large_files', { minSize: LARGE_FILE_MIN_SIZE })
+        .then(setLargeFiles)
+        .catch(console.error)
+    } else if (activeTab === 'ai_cache') {
+      fetchedTabs.current.add(activeTab)
+      invoke<ScanNode[]>('get_ai_cache_files')
+        .then(setAiCaches)
+        .catch(console.error)
+    } else if (activeTab === 'leftovers' && installedAppsLoaded) {
+      fetchedTabs.current.add(activeTab)
+      invoke<ScanNode[]>('get_leftover_candidates', { installedApps })
+        .then(setLeftoverData)
+        .catch(console.error)
+    }
+  }, [activeTab, scanResult, installedApps, installedAppsLoaded])
 
   const handleScan = async (overrideTarget?: string) => {
     if (scanning) return;
     setActiveTab('overview')
     setScanning(true)
     setScannedBytes(0)
+
+    // A new scan invalidates every previously fetched/derived view.
+    fetchedTabs.current = new Set()
+    setLargeFiles(null)
+    setAiCaches(null)
+    setLeftoverData(null)
+    setDuplicatesWastedSize(0)
+    setScanBadges({ largeFilesSize: 0, aiCacheSize: 0 })
+
     const targetPath = overrideTarget || scanTarget;
     try {
       let exclusions = [];
@@ -141,12 +128,13 @@ function App() {
         try { exclusions = JSON.parse(saved); } catch (e) {}
       }
 
-      const result = await invoke<ScanNode>('scan_path', { 
+      const result = await invoke<ScanSummary>('scan_path', {
         path: targetPath,
-        exclusions 
+        exclusions
       })
-      setScanResult(result)
-      
+      setScanResult(result.tree)
+      setScanBadges({ largeFilesSize: result.largeFilesSize, aiCacheSize: result.aiCacheSize })
+
     } catch (err) {
       console.error(err)
     } finally {
@@ -207,13 +195,10 @@ function App() {
     }
   }
 
-  const handleSmartDelete = useCallback(async (paths: string[]) => {
-    const totalSize = paths.reduce((acc, p) => {
-      const file = flatFiles.find(f => f.path === p)
-      return acc + (file?.size || 0)
-    }, 0)
-    setConfirmDelete({ paths, size: totalSize })
-  }, [flatFiles])
+  const handleSmartDelete = useCallback((items: { path: string; size: number }[]) => {
+    const totalSize = items.reduce((acc, i) => acc + i.size, 0)
+    setConfirmDelete({ paths: items.map(i => i.path), size: totalSize })
+  }, [])
 
   const executeDelete = async () => {
     if (!confirmDelete) return
@@ -234,25 +219,25 @@ function App() {
   const totalStagedSize = stagedDeletes.reduce((acc, curr) => acc + curr.size, 0)
   const formattedStagedSize = (totalStagedSize / 1e9).toFixed(2) + ' GB'
 
-  const tabSizes = useMemo(() => ({
-    duplicates: 0, // We'll compute this from DuplicateView's totalWastedSize if available, for now just use 0
-    large_files: largeFiles.reduce((acc, f) => acc + f.size, 0),
-    ai_cache: aiCaches.reduce((acc, f) => acc + f.size, 0),
-    leftovers: leftoverData.reduce((acc, f) => acc + f.size, 0),
-    dev_cleanup: 0, // Will be populated by DevCleanupView
-  }), [largeFiles, aiCaches, leftoverData])
+  const tabSizes = {
+    duplicates: duplicatesWastedSize,
+    large_files: scanBadges.largeFilesSize,
+    ai_cache: scanBadges.aiCacheSize,
+    leftovers: leftoverData ? leftoverData.reduce((acc, f) => acc + f.size, 0) : 0,
+    dev_cleanup: 0, // Populated by DevCleanupView
+  }
 
   return (
     <>
       <FdaModal />
-      <Layout 
-        activeTab={activeTab} 
+      <Layout
+        activeTab={activeTab}
         onTabChange={(tab) => {
           startTransition(() => {
             setActiveTab(tab);
           });
-        }} 
-        hasScanned={!!scanResult} 
+        }}
+        hasScanned={!!scanResult}
         tabSizes={tabSizes}
         onNewScan={handleNewScan}
         isScanning={scanning}
@@ -261,7 +246,7 @@ function App() {
         <header className="absolute top-0 right-8 z-50 flex items-center h-10 mt-2 space-x-3">
           {scanResult && (
             <>
-              <button 
+              <button
                 onClick={() => handleScan()}
                 className="flex items-center space-x-2 text-neutral-400 hover:text-white bg-black/40 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/5 transition-all text-sm backdrop-blur-md"
                 title="Rescan Drive"
@@ -269,7 +254,7 @@ function App() {
                 <RefreshCw size={16} className={scanning ? 'animate-spin text-primary' : ''} />
                 <span>{scanning ? 'Scanning...' : 'Rescan'}</span>
               </button>
-              <button 
+              <button
                 onClick={() => setIsSearchOpen(true)}
                 className="flex items-center space-x-2 text-neutral-400 hover:text-white bg-black/40 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/5 transition-all text-sm backdrop-blur-md"
               >
@@ -281,11 +266,11 @@ function App() {
           )}
         </header>
 
-        <SearchOverlay 
-          data={scanResult} 
-          isOpen={isSearchOpen} 
-          onClose={() => setIsSearchOpen(false)} 
-          onDelete={(path) => handleSmartDelete([path])}
+        <SearchOverlay
+          data={scanResult}
+          isOpen={isSearchOpen}
+          onClose={() => setIsSearchOpen(false)}
+          onDelete={(node) => handleSmartDelete([{ path: node.path, size: node.size }])}
         />
 
         <div className="flex-1 relative z-10 flex flex-col min-h-0 overflow-hidden pt-12">
@@ -304,7 +289,7 @@ function App() {
               </div>
               <h2 className="text-2xl font-bold mb-2">Ready to scan</h2>
               <p className="text-gray-400 mb-8 max-w-md text-center">Analyze your disk space and find junk files to reclaim gigabytes of storage safely.</p>
-              
+
               <div className="flex items-center space-x-2 mb-6 bg-white/5 px-4 py-2 rounded-lg border border-white/10">
                 <span className="text-sm text-neutral-400">Scan target:</span>
                 <span className="text-sm text-white font-medium truncate max-w-[300px]">{scanTarget}</span>
@@ -328,7 +313,7 @@ function App() {
                 </button>
               </div>
 
-              <Button 
+              <Button
                 id="start-scan-btn"
                 className="text-lg h-14 px-8 rounded-xl bg-primary hover:bg-primary/90 text-white shadow-[0_0_20px_rgba(220,38,38,0.3)] hover:shadow-[0_0_30px_rgba(220,38,38,0.5)] transition-all duration-300 transform hover:scale-[1.02]"
                 onClick={() => handleScan()}
@@ -358,19 +343,10 @@ function App() {
             </div>
           )}
 
-                    {/* Loading Processing State */}
-          {isProcessing && (
-            <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-              <Loader2 className="w-12 h-12 text-primary animate-spin mb-4" />
-              <h3 className="text-xl font-semibold text-white">Processing Data...</h3>
-              <p className="text-neutral-400 text-sm mt-2">Classifying files and organizing smart views</p>
-            </div>
-          )}
-
           {/* Persisted Views */}
           {scanResult && !scanning && activeTab !== 'settings' && activeTab !== 'system_info' && (
             <div className="flex-1 min-h-0 relative flex flex-col pt-4">
-              
+
               {/* Treemap View */}
               <div className={`flex-1 flex flex-col min-h-0 ${activeTab === 'overview' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 min-h-0">
@@ -384,27 +360,28 @@ function App() {
                   <h3 className="text-xl font-semibold">Disk Explorer</h3>
                 </div>
                 <div className="h-full border border-white/5 rounded-xl overflow-hidden glass">
-                   <FileListView data={scanResult} /> 
+                   <FileListView data={scanResult} />
                 </div>
               </div>
 
               {/* Smart Clean Views (Kept mounted, toggled via CSS to prevent re-renders) */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'duplicates' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                  <DuplicateView 
+                  <DuplicateView
                   scanResult={scanResult}
                   onDelete={handleSmartDelete}
+                  onWastedSizeChange={setDuplicatesWastedSize}
                 />
                 </div>
               </div>
 
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'large_files' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                  <SmartCleanView 
-                  title="Large Files" 
+                  <SmartCleanView
+                  title="Large Files"
                   description="Files larger than 100MB taking up significant space."
                   icon={<HardDrive size={24} />}
-                  items={largeFiles}
+                  items={largeFiles ?? []}
                   onDelete={handleSmartDelete}
                 />
                 </div>
@@ -412,8 +389,8 @@ function App() {
 
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'ai_cache' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                  <AiCacheView 
-                  items={aiCaches}
+                  <AiCacheView
+                  items={aiCaches ?? []}
                   onDelete={handleSmartDelete}
                 />
                 </div>
@@ -421,11 +398,11 @@ function App() {
 
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'leftovers' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                  <SmartCleanView 
-                  title="App Leftovers" 
+                  <SmartCleanView
+                  title="App Leftovers"
                   description="Data from applications you no longer have installed."
                   icon={<AppWindow size={24} />}
-                  items={leftoverData}
+                  items={leftoverData ?? []}
                   onDelete={handleSmartDelete}
                 />
                 </div>
@@ -443,7 +420,7 @@ function App() {
 
         {/* Floating Radar Trash */}
         {scanResult && !scanning && (activeTab === 'overview' || activeTab === 'list') && !isTrashOpen && (
-          <div 
+          <div
             id="radar-trash"
             className="absolute bottom-6 right-6 w-20 h-20 z-50 flex items-center justify-center cursor-pointer group"
             onClick={() => {
@@ -452,10 +429,14 @@ function App() {
               }
             }}
           >
-            {/* Pulse rings */}
-            <div className="absolute inset-0 bg-red-600/30 rounded-full animate-ping opacity-75 group-hover:bg-red-500/50" />
-            <div className="absolute inset-2 bg-red-600/40 rounded-full animate-pulse opacity-75" />
-            
+            {/* Pulse rings (only worth animating when there's something staged) */}
+            {stagedDeletes.length > 0 && (
+              <>
+                <div className="absolute inset-0 bg-red-600/30 rounded-full animate-ping opacity-75 group-hover:bg-red-500/50" />
+                <div className="absolute inset-2 bg-red-600/40 rounded-full animate-pulse opacity-75" />
+              </>
+            )}
+
             {/* Core Icon */}
             <div className="absolute inset-4 bg-gradient-to-br from-red-500 to-red-900 rounded-full flex items-center justify-center shadow-lg shadow-red-900/50 border border-red-400/30 transition-transform group-hover:scale-110">
               <Trash2 className="text-white w-6 h-6" />
@@ -478,14 +459,14 @@ function App() {
                   <AlertCircle size={20} />
                   <h3 className="font-bold text-lg">Trash Cart</h3>
                 </div>
-                <button 
+                <button
                   onClick={() => setIsTrashOpen(false)}
                   className="p-1 hover:bg-white/10 rounded-lg transition-colors text-gray-400 hover:text-white"
                 >
                   <X size={20} />
                 </button>
               </div>
-              
+
               {/* Items List */}
               <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
                 {stagedDeletes.map(item => (
@@ -498,7 +479,7 @@ function App() {
                       <span className="text-sm font-semibold text-gray-400">
                         {(item.size / 1e9).toFixed(2)} GB
                       </span>
-                      <button 
+                      <button
                         onClick={() => handleRemoveStaged(item.path)}
                         className="text-gray-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors"
                         title="Remove from cart"
@@ -515,8 +496,8 @@ function App() {
                 <div className="text-sm text-gray-300">
                   Total: <span className="font-bold text-white">{formattedStagedSize}</span>
                 </div>
-                <Button 
-                  variant="destructive" 
+                <Button
+                  variant="destructive"
                   onClick={handleConfirmDelete}
                   className="bg-red-600 hover:bg-red-700 text-white font-semibold shadow-lg shadow-red-900/50 px-6"
                 >

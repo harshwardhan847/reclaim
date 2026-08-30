@@ -8,19 +8,42 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { FileIcon, FolderIcon, HardDriveIcon, CheckCircle2, ChevronRight, CornerUpLeft } from 'lucide-react'
-import { useState, useMemo } from 'react'
+import { FileIcon, FolderIcon, HardDriveIcon, CheckCircle2, ChevronRight, CornerUpLeft, Loader2 } from 'lucide-react'
+import { useState, useMemo, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 
 function FileListView({ data }: { data?: ScanNode | null }) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [history, setHistory] = useState<ScanNode[]>([])
+  // Directories beyond the scan's summary depth/breadth cap arrive with no
+  // `children` even though they're real directories -- fetched on demand as
+  // the user navigates into them, instead of shipping the whole disk tree.
+  const [childrenCache, setChildrenCache] = useState<Record<string, ScanNode[]>>({})
 
   // Current folder is the last item in history, or root data
   const currentFolder = history.length > 0 ? history[history.length - 1] : data
+  // Prefer the freshly-fetched full child list over the tree's preloaded one:
+  // the preloaded list may be capped (with a synthetic "N more items" row) if
+  // this folder has more than the summary tree's per-directory cap.
+  const loadedChildren = currentFolder ? (childrenCache[currentFolder.path] ?? currentFolder.children) : undefined
+  const isLoading = !!currentFolder && currentFolder.isDir !== false && loadedChildren === undefined
+
+  useEffect(() => {
+    if (!currentFolder || currentFolder.isDir === false) return
+    if (childrenCache[currentFolder.path]) return
+    let cancelled = false
+    invoke<ScanNode[]>('get_children', { path: currentFolder.path })
+      .then(kids => {
+        if (!cancelled) setChildrenCache(prev => ({ ...prev, [currentFolder.path]: kids }))
+      })
+      .catch(console.error)
+    return () => { cancelled = true }
+  }, [currentFolder, childrenCache])
+
   const currentFiles = useMemo(() => {
-    if (!currentFolder || !currentFolder.children) return []
-    return [...currentFolder.children].sort((a, b) => b.size - a.size)
-  }, [currentFolder])
+    if (!loadedChildren) return []
+    return [...loadedChildren].sort((a, b) => b.size - a.size)
+  }, [loadedChildren])
 
   const navigateUp = () => {
     setHistory(prev => prev.slice(0, prev.length - 1))
@@ -31,7 +54,7 @@ function FileListView({ data }: { data?: ScanNode | null }) {
   }
 
   const handleDoubleClick = (file: ScanNode) => {
-    if (file.children) {
+    if (file.isDir) {
       setHistory(prev => [...prev, file])
     }
   }
@@ -122,7 +145,7 @@ function FileListView({ data }: { data?: ScanNode | null }) {
                 <TableCell>
                   <div className="flex items-center space-x-3">
                     <div className="p-2 rounded-lg bg-black/40 text-primary group-hover:scale-110 transition-transform">
-                      {file.children ? <FolderIcon size={18} /> : <FileIcon size={18} />}
+                      {file.isDir ? <FolderIcon size={18} /> : <FileIcon size={18} />}
                     </div>
                     <div>
                       <p className="font-medium text-white truncate max-w-[200px] sm:max-w-xs">{file.name}</p>
@@ -132,7 +155,7 @@ function FileListView({ data }: { data?: ScanNode | null }) {
                 </TableCell>
                 <TableCell className="text-neutral-400">
                   <span className="px-2 py-1 rounded-md bg-white/5 text-xs border border-white/5">
-                    {file.children ? 'Directory' : 'File'}
+                    {file.isDir ? 'Directory' : 'File'}
                   </span>
                 </TableCell>
                 <TableCell className="text-right font-medium text-white">
@@ -142,8 +165,15 @@ function FileListView({ data }: { data?: ScanNode | null }) {
             ))}
           </TableBody>
         </Table>
-        
-        {currentFiles.length === 0 && (
+
+        {isLoading && (
+          <div className="flex flex-col items-center justify-center h-48 text-neutral-500">
+            <Loader2 size={28} className="animate-spin mb-3 text-primary" />
+            <p>Loading folder contents...</p>
+          </div>
+        )}
+
+        {!isLoading && currentFiles.length === 0 && (
           <div className="flex flex-col items-center justify-center h-48 text-neutral-500">
             <p>No items inside</p>
           </div>

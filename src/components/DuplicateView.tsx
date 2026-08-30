@@ -8,13 +8,21 @@ import { Button } from '@/components/ui/button'
 
 interface DuplicateViewProps {
   scanResult: ScanNode | null
-  onDelete: (paths: string[]) => void
+  onDelete: (items: { path: string; size: number }[]) => void
+  onWastedSizeChange?: (size: number) => void
 }
 
-function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.log("DuplicateView Rendered");
+interface DuplicateGroupResult {
+  size: number
+  paths: string[]
+}
+
+const MIN_DUPLICATE_SIZE = 1024 * 1024 // ignore files under 1MB
+
+function DuplicateView({ scanResult, onDelete, onWastedSizeChange }: DuplicateViewProps) {
   const [loading, setLoading] = useState(false)
   const [hasRun, setHasRun] = useState(false)
-  const [duplicateGroups, setDuplicateGroups] = useState<string[][]>([])
+  const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroupResult[]>([])
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
 
   // Format bytes
@@ -36,47 +44,23 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
     // Yield to the browser so the loading spinner actually appears before we freeze the main thread
     await new Promise(resolve => setTimeout(resolve, 50))
 
-    // 1. Flatten tree and group by exact size (React-side)
-    const sizeMap = new Map<number, string[]>()
-    const flat: ScanNode[] = []
-    
-    const traverse = (node: ScanNode) => {
-      // Only files, not directories, and ignore very small files (< 1MB) to save time
-      if (!node.children && node.size > 1024 * 1024) {
-        flat.push(node)
-        const existing = sizeMap.get(node.size) || []
-        existing.push(node.path)
-        sizeMap.set(node.size, existing)
-      }
-      if (node.children) node.children.forEach(traverse)
-    }
-    traverse(scanResult)
-
-    // 2. Extract potential duplicate groups (same size)
-    const potentialGroups = Array.from(sizeMap.values()).filter(paths => paths.length > 1)
-
-    if (potentialGroups.length === 0) {
-      setDuplicateGroups([])
-      setLoading(false)
-      return
-    }
-
-    // 3. Call Rust to hash the actual files in these groups
     try {
-      const trueDuplicates: string[][] = await invoke('find_true_duplicates', { sizeGroups: potentialGroups })
-      
+      // Grouping by size and hashing both happen server-side against the
+      // already-scanned index -- no re-walk, no flattening the tree in JS.
+      const trueDuplicates: DuplicateGroupResult[] = await invoke('find_duplicates', { minSize: MIN_DUPLICATE_SIZE })
+
       const mediaExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.mp4', '.mov', '.avi', '.mkv', '.mp3', '.wav', '.aac', '.m4a', '.flac'])
-      const finalDuplicates: string[][] = []
+      const finalDuplicates: DuplicateGroupResult[] = []
 
       for (const group of trueDuplicates) {
-        const mediaPaths = group.filter(p => {
+        const mediaPaths = group.paths.filter(p => {
           const idx = p.lastIndexOf('.')
           if (idx === -1) return false
           const ext = p.substring(idx).toLowerCase()
           return mediaExts.has(ext)
         })
-        
-        const nonMediaPaths = group.filter(p => {
+
+        const nonMediaPaths = group.paths.filter(p => {
           const idx = p.lastIndexOf('.')
           if (idx === -1) return true
           const ext = p.substring(idx).toLowerCase()
@@ -85,7 +69,7 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
 
         // Media files are considered duplicates anywhere
         if (mediaPaths.length > 1) {
-          finalDuplicates.push(mediaPaths)
+          finalDuplicates.push({ size: group.size, paths: mediaPaths })
         }
 
         // Non-media files MUST be in the same parent directory to be considered duplicates
@@ -98,20 +82,12 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
 
         for (const pathsInSameDir of parentMap.values()) {
           if (pathsInSameDir.length > 1) {
-            finalDuplicates.push(pathsInSameDir)
+            finalDuplicates.push({ size: group.size, paths: pathsInSameDir })
           }
         }
       }
 
-      const pathSizeMap = new Map<string, number>()
-      flat.forEach(n => pathSizeMap.set(n.path, n.size))
-
-      finalDuplicates.sort((a, b) => {
-        const sizeA = pathSizeMap.get(a[0]) || 0
-        const sizeB = pathSizeMap.get(b[0]) || 0
-        return sizeB - sizeA // largest first
-      })
-
+      finalDuplicates.sort((a, b) => b.size - a.size) // largest first
       setDuplicateGroups(finalDuplicates)
     } catch (err) {
       console.error("Error finding duplicates:", err)
@@ -138,40 +114,38 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
   const handleSmartSelect = () => {
     const newSelected = new Set<string>()
     duplicateGroups.forEach(group => {
-      for (let i = 1; i < group.length; i++) {
-        newSelected.add(group[i])
+      for (let i = 1; i < group.paths.length; i++) {
+        newSelected.add(group.paths[i])
       }
     })
     setSelectedPaths(newSelected)
   }
 
+  // Every path in a group shares that group's size, so this is a cheap
+  // derived map from the (bounded) duplicate results -- no tree traversal.
+  const pathSizeMap = useMemo(() => {
+    const map = new Map<string, number>()
+    duplicateGroups.forEach(group => {
+      group.paths.forEach(p => map.set(p, group.size))
+    })
+    return map
+  }, [duplicateGroups])
+
   const handleDelete = () => {
     if (selectedPaths.size === 0) return
-    onDelete(Array.from(selectedPaths))
+    const items = Array.from(selectedPaths).map(path => ({ path, size: pathSizeMap.get(path) || 0 }))
+    onDelete(items)
     setSelectedPaths(new Set())
   }
 
-  const pathSizeMap = useMemo(() => {
-    const map = new Map<string, number>()
-    if (!scanResult) return map
-
-    const traverse = (node: ScanNode) => {
-      map.set(node.path, node.size)
-      if (node.children) node.children.forEach(traverse)
-    }
-    traverse(scanResult)
-    return map
-  }, [scanResult])
-
   // Calculate total waste
   const totalWastedSize = useMemo(() => {
-    let total = 0
-    duplicateGroups.forEach(group => {
-      const size = pathSizeMap.get(group[0]) || 0
-      total += size * (group.length - 1)
-    })
-    return total
-  }, [duplicateGroups, pathSizeMap])
+    return duplicateGroups.reduce((total, group) => total + group.size * (group.paths.length - 1), 0)
+  }, [duplicateGroups])
+
+  useEffect(() => {
+    onWastedSizeChange?.(totalWastedSize)
+  }, [totalWastedSize, onWastedSizeChange])
 
   const selectedSize = useMemo(() => {
     let total = 0
@@ -193,7 +167,7 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
             <p className="text-sm text-neutral-400 mt-1">Files with identical contents verified by cryptographic hashing.</p>
           </div>
         </div>
-        
+
         <div className="text-right">
           <div className="text-3xl font-extrabold text-white">
             {formatSize(totalWastedSize)} <span className="text-lg text-neutral-500 font-medium">wasted space</span>
@@ -203,7 +177,7 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
 
       <div className="px-6 py-3 bg-black/40 flex items-center justify-between border-b border-white/5">
         <div className="flex items-center space-x-3">
-          <Button 
+          <Button
             onClick={handleSmartSelect}
             disabled={duplicateGroups.length === 0 || loading}
             variant="outline"
@@ -213,7 +187,7 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
             Smart Select
           </Button>
 
-          <Button 
+          <Button
             onClick={runDuplicateScan}
             disabled={loading}
             variant="outline"
@@ -224,7 +198,7 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
           </Button>
         </div>
 
-        <Button 
+        <Button
           onClick={handleDelete}
           disabled={selectedPaths.size === 0}
           className="bg-red-600 hover:bg-red-700 text-white font-bold shadow-lg shadow-red-900/20 disabled:opacity-50 transition-all duration-200"
@@ -271,10 +245,10 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
             </TableHeader>
             <TableBody>
               {duplicateGroups.slice(0, 150).map((group) => {
-                return group.map((path, pathIdx) => (
-                  <TableRow 
+                return group.paths.map((path, pathIdx) => (
+                  <TableRow
                     key={path}
-                    className={`border-white/5 transition-colors cursor-pointer select-none group-row ${pathIdx === group.length - 1 ? 'border-b-[10px] border-b-black/40' : 'border-b-0'} hover:bg-white/5`}
+                    className={`border-white/5 transition-colors cursor-pointer select-none group-row ${pathIdx === group.paths.length - 1 ? 'border-b-[10px] border-b-black/40' : 'border-b-0'} hover:bg-white/5`}
                     onClick={(e) => toggleSelect(path, e)}
                   >
                     <TableCell className="w-12 text-center">

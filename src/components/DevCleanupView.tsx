@@ -12,7 +12,7 @@ type DevDirectory = {
 };
 
 interface DevCleanupViewProps {
-  onDelete: (paths: string[]) => void;
+  onDelete: (items: { path: string; size: number }[]) => void;
 }
 
 const formatBytes = (bytes: number) => {
@@ -102,7 +102,8 @@ function DevCleanupView({ onDelete }: DevCleanupViewProps) {
   }, [directories, selectedPaths]);
 
   const handleDelete = () => {
-    onDelete(Array.from(selectedPaths));
+    const toDelete = directories.filter(d => selectedPaths.has(d.path)).map(d => ({ path: d.path, size: d.size }));
+    onDelete(toDelete);
     setSelectedPaths(new Set());
     setDirectories(directories.filter(d => !selectedPaths.has(d.path)));
   };

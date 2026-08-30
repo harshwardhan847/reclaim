@@ -71,6 +71,7 @@ dependencies = [
  "dirs",
  "jwalk",
  "log",
+ "rayon",
  "serde",
  "serde_json",
  "sysinfo",

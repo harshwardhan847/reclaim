@@ -16,7 +16,7 @@ interface SmartCleanViewProps {
   title: string
   description: string
   items: ScanNode[]
-  onDelete: (paths: string[]) => void
+  onDelete: (items: { path: string; size: number }[]) => void
   icon: React.ReactNode
 }
 
@@ -50,7 +50,8 @@ function SmartCleanView({ title, description, items, onDelete, icon }: SmartClea
 
   const handleDelete = () => {
     if (selected.size === 0) return
-    onDelete(Array.from(selected))
+    const toDelete = items.filter(i => selected.has(i.path)).map(i => ({ path: i.path, size: i.size }))
+    onDelete(toDelete)
     setSelected(new Set())
   }
 
@@ -129,7 +130,7 @@ function SmartCleanView({ title, description, items, onDelete, icon }: SmartClea
                 <TableCell>
                   <div className="flex items-center space-x-3">
                     <div className="p-2 rounded-lg bg-black/40 text-primary group-hover:scale-110 transition-transform">
-                      {file.children ? <FolderIcon size={18} /> : <FileIcon size={18} />}
+                      {file.isDir ? <FolderIcon size={18} /> : <FileIcon size={18} />}
                     </div>
                     <div>
                       <p className="font-medium text-white truncate max-w-sm" title={file.name}>{file.name}</p>
@@ -139,7 +140,7 @@ function SmartCleanView({ title, description, items, onDelete, icon }: SmartClea
                 </TableCell>
                 <TableCell className="text-neutral-400">
                   <span className="px-2 py-1 rounded-md bg-white/5 text-xs border border-white/5">
-                    {file.children ? 'Directory' : 'File'}
+                    {file.isDir ? 'Directory' : 'File'}
                   </span>
                 </TableCell>
                 <TableCell className="text-right font-medium text-white text-lg">

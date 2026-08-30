@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 
 interface AiCacheViewProps {
   items: ScanNode[]
-  onDelete: (paths: string[]) => void
+  onDelete: (items: { path: string; size: number }[]) => void
 }
 
 type AgentGroup = {
@@ -123,7 +123,8 @@ function AiCacheView({ items, onDelete }: AiCacheViewProps) {
 
   const handleDelete = () => {
     if (selected.size === 0) return
-    onDelete(Array.from(selected))
+    const toDelete = items.filter(i => selected.has(i.path)).map(i => ({ path: i.path, size: i.size }))
+    onDelete(toDelete)
     setSelected(new Set())
   }
 

@@ -8,6 +8,8 @@ export interface ScanNode {
   path: string
   name: string
   size: number
+  isDir?: boolean
+  isAggregate?: boolean
   children?: ScanNode[]
 }
 

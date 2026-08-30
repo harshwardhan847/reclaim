@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { Search, File as FileIcon, Folder as FolderIcon, X, Trash2 } from 'lucide-react'
+import { invoke } from '@tauri-apps/api/core'
 import { type ScanNode } from './TreemapViewer'
 
 interface SearchOverlayProps {
   data: ScanNode | null
   isOpen: boolean
   onClose: () => void
-  onDelete: (path: string) => void
+  onDelete: (node: ScanNode) => void
 }
 
 export function SearchOverlay({ data, isOpen, onClose, onDelete }: SearchOverlayProps) {
@@ -23,38 +24,20 @@ export function SearchOverlay({ data, isOpen, onClose, onDelete }: SearchOverlay
     }
   }, [isOpen])
 
-  // Flatten once when data changes
-  const flatData = useRef<ScanNode[]>([])
+  // Search runs server-side against the already-scanned index -- no local
+  // flattened copy of the tree to keep around or re-derive.
   useEffect(() => {
-    if (data) {
-      const flat: ScanNode[] = []
-      const traverse = (node: ScanNode) => {
-        flat.push(node)
-        if (node.children) node.children.forEach(traverse)
-      }
-      traverse(data)
-      flatData.current = flat
-    }
-  }, [data])
-
-  useEffect(() => {
-    if (!query.trim()) {
+    if (!data || !query.trim()) {
       setResults([])
       return
     }
     const timer = setTimeout(() => {
-      const lowerQuery = query.toLowerCase()
-      const matches: ScanNode[] = []
-      for (const n of flatData.current) {
-        if (n.name.toLowerCase().includes(lowerQuery)) {
-          matches.push(n)
-          if (matches.length >= 50) break
-        }
-      }
-      setResults(matches)
+      invoke<ScanNode[]>('search_files', { query, limit: 50 })
+        .then(setResults)
+        .catch(console.error)
     }, 200)
     return () => clearTimeout(timer)
-  }, [query])
+  }, [query, data])
 
   // Handle global Cmd+K to open
   useEffect(() => {
@@ -131,7 +114,7 @@ export function SearchOverlay({ data, isOpen, onClose, onDelete }: SearchOverlay
               >
                 <div className="flex items-center space-x-3 overflow-hidden">
                   <div className="p-2 bg-white/5 rounded-lg text-primary shrink-0">
-                    {node.children ? <FolderIcon size={18} /> : <FileIcon size={18} />}
+                    {node.isDir ? <FolderIcon size={18} /> : <FileIcon size={18} />}
                   </div>
                   <div className="truncate min-w-0">
                     <p className="text-white font-medium truncate">{node.name}</p>
@@ -144,7 +127,7 @@ export function SearchOverlay({ data, isOpen, onClose, onDelete }: SearchOverlay
                   <button 
                     onClick={(e) => {
                       e.stopPropagation()
-                      onDelete(node.path)
+                      onDelete(node)
                     }}
                     className="p-2 text-neutral-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
                     title="Move to Trash"
