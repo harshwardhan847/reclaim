@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::Emitter;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct ScanNode {
     path: String,
     name: String,
@@ -138,6 +138,24 @@ async fn scan_path(window: tauri::Window, path: String, exclusions: Option<Vec<S
     }
     
     let tree = build_tree(Path::new(&path), &path_sizes, &dir_children);
+    
+    // Save to cache asynchronously so we don't block UI
+    let cache_node = tree.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        println!("Background: Saving scan cache to disk...");
+        if let Some(cache_path) = get_cache_path() {
+            if let Ok(file) = std::fs::File::create(&cache_path) {
+                let writer = std::io::BufWriter::new(file);
+                match serde_json::to_writer(writer, &cache_node) {
+                    Ok(_) => println!("Background: Cache saved successfully at {:?}", cache_path),
+                    Err(e) => println!("Background: Error saving cache: {}", e),
+                }
+            } else {
+                println!("Background: Failed to create cache file");
+            }
+        }
+    });
+
     Ok(tree)
 }
 
@@ -241,14 +259,24 @@ fn get_cache_path() -> Option<PathBuf> {
 }
 
 #[tauri::command]
-fn get_scan_cache() -> Result<Option<ScanNode>, String> {
+async fn get_scan_cache() -> Result<Option<ScanNode>, String> {
     if let Some(cache_path) = get_cache_path() {
         if cache_path.exists() {
-            if let Ok(file) = std::fs::File::open(cache_path) {
-                if let Ok(node) = serde_json::from_reader(file) {
-                    return Ok(Some(node));
+            // Use spawn_blocking for heavy file I/O and JSON parsing
+            return tauri::async_runtime::spawn_blocking(move || {
+                if let Ok(file) = std::fs::File::open(cache_path) {
+                    let reader = std::io::BufReader::new(file);
+                    if let Ok(node) = serde_json::from_reader(reader) {
+                        println!("Cache loaded successfully!");
+                        return Ok(Some(node));
+                    } else {
+                        println!("Failed to parse cache JSON. It might be corrupted from an interrupted save.");
+                    }
+                } else {
+                    println!("Failed to open cache file.");
                 }
-            }
+                Ok(None)
+            }).await.unwrap_or(Ok(None));
         }
     }
     Ok(None)

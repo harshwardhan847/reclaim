@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { type ScanNode } from './TreemapViewer'
 import { invoke } from '@tauri-apps/api/core'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { FileIcon, CheckCircle2, Trash2, Copy, Loader2, Sparkles } from 'lucide-react'
+import { FileIcon, CheckCircle2, Trash2, Copy, Loader2, Sparkles, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface DuplicateViewProps {
@@ -24,60 +24,61 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
 
-  useEffect(() => {
-    async function findDuplicates() {
-      if (!scanResult) return
-      setLoading(true)
+  const runDuplicateScan = async () => {
+    if (!scanResult) return
+    setLoading(true)
+    setDuplicateGroups([])
+    setSelectedPaths(new Set())
 
-      // 1. Flatten tree and group by exact size (React-side)
-      const sizeMap = new Map<number, string[]>()
-      const flat: ScanNode[] = []
-      
-      const traverse = (node: ScanNode) => {
-        // Only files, not directories, and ignore very small files (< 1MB) to save time
-        if (!node.children && node.size > 1024 * 1024) {
-          flat.push(node)
-          const existing = sizeMap.get(node.size) || []
-          existing.push(node.path)
-          sizeMap.set(node.size, existing)
-        }
-        if (node.children) node.children.forEach(traverse)
+    // 1. Flatten tree and group by exact size (React-side)
+    const sizeMap = new Map<number, string[]>()
+    const flat: ScanNode[] = []
+    
+    const traverse = (node: ScanNode) => {
+      // Only files, not directories, and ignore very small files (< 1MB) to save time
+      if (!node.children && node.size > 1024 * 1024) {
+        flat.push(node)
+        const existing = sizeMap.get(node.size) || []
+        existing.push(node.path)
+        sizeMap.set(node.size, existing)
       }
-      traverse(scanResult)
+      if (node.children) node.children.forEach(traverse)
+    }
+    traverse(scanResult)
 
-      // 2. Extract potential duplicate groups (same size)
-      const potentialGroups = Array.from(sizeMap.values()).filter(paths => paths.length > 1)
+    // 2. Extract potential duplicate groups (same size)
+    const potentialGroups = Array.from(sizeMap.values()).filter(paths => paths.length > 1)
 
-      if (potentialGroups.length === 0) {
-        setDuplicateGroups([])
-        setLoading(false)
-        return
-      }
-
-      // 3. Call Rust to hash the actual files in these groups
-      try {
-        const trueDuplicates: string[][] = await invoke('find_true_duplicates', { sizeGroups: potentialGroups })
-        // Sort groups by file size (we need to find the size for one of the files in the group)
-        
-        // Let's create a map to look up size quickly
-        const pathSizeMap = new Map<string, number>()
-        flat.forEach(n => pathSizeMap.set(n.path, n.size))
-
-        trueDuplicates.sort((a, b) => {
-          const sizeA = pathSizeMap.get(a[0]) || 0
-          const sizeB = pathSizeMap.get(b[0]) || 0
-          return sizeB - sizeA // largest first
-        })
-
-        setDuplicateGroups(trueDuplicates)
-      } catch (err) {
-        console.error("Error finding duplicates:", err)
-      } finally {
-        setLoading(false)
-      }
+    if (potentialGroups.length === 0) {
+      setDuplicateGroups([])
+      setLoading(false)
+      return
     }
 
-    findDuplicates()
+    // 3. Call Rust to hash the actual files in these groups
+    try {
+      const trueDuplicates: string[][] = await invoke('find_true_duplicates', { sizeGroups: potentialGroups })
+      
+      const pathSizeMap = new Map<string, number>()
+      flat.forEach(n => pathSizeMap.set(n.path, n.size))
+
+      trueDuplicates.sort((a, b) => {
+        const sizeA = pathSizeMap.get(a[0]) || 0
+        const sizeB = pathSizeMap.get(b[0]) || 0
+        return sizeB - sizeA // largest first
+      })
+
+      setDuplicateGroups(trueDuplicates)
+    } catch (err) {
+      console.error("Error finding duplicates:", err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Auto-run when scanResult changes (new disk scan or cache load)
+  useEffect(() => {
+    runDuplicateScan()
   }, [scanResult])
 
   const toggleSelect = (path: string, e?: React.MouseEvent) => {
@@ -91,8 +92,6 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
   const handleSmartSelect = () => {
     const newSelected = new Set<string>()
     duplicateGroups.forEach(group => {
-      // Keep the first one (or oldest, but we don't have dates right now. We'll just keep the first)
-      // and select the rest for deletion
       for (let i = 1; i < group.length; i++) {
         newSelected.add(group[i])
       }
@@ -104,8 +103,6 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
     if (selectedPaths.size === 0) return
     onDelete(Array.from(selectedPaths))
     setSelectedPaths(new Set())
-    
-    // We ideally should refresh the duplicate list, but the user is advised to rescan
   }
 
   // Calculate total waste
@@ -125,7 +122,7 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
 
     duplicateGroups.forEach(group => {
       const size = pathSizeMap.get(group[0]) || 0
-      total += size * (group.length - 1) // Waste is the duplicates, not the original
+      total += size * (group.length - 1)
     })
     
     return total
@@ -151,7 +148,6 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
     return total
   }, [selectedPaths, scanResult])
 
-
   return (
     <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full">
       <div className="p-6 border-b border-white/5 flex items-center justify-between bg-black/20">
@@ -173,15 +169,27 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
       </div>
 
       <div className="px-6 py-3 bg-black/40 flex items-center justify-between border-b border-white/5">
-        <Button 
-          onClick={handleSmartSelect}
-          disabled={duplicateGroups.length === 0 || loading}
-          variant="outline"
-          className="bg-transparent border-white/10 hover:bg-white/5 text-white"
-        >
-          <Sparkles size={16} className="mr-2 text-primary" />
-          Smart Select
-        </Button>
+        <div className="flex items-center space-x-3">
+          <Button 
+            onClick={handleSmartSelect}
+            disabled={duplicateGroups.length === 0 || loading}
+            variant="outline"
+            className="bg-transparent border-white/10 hover:bg-white/5 text-white"
+          >
+            <Sparkles size={16} className="mr-2 text-primary" />
+            Smart Select
+          </Button>
+
+          <Button 
+            onClick={runDuplicateScan}
+            disabled={loading}
+            variant="outline"
+            className="bg-transparent border-white/10 hover:bg-white/5 text-white"
+          >
+            <RefreshCw size={16} className={`mr-2 text-neutral-400 ${loading ? 'animate-spin' : ''}`} />
+            Re-check
+          </Button>
+        </div>
 
         <Button 
           onClick={handleDelete}

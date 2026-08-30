@@ -8,10 +8,11 @@ import { FileListView } from '@/components/FileListView'
 import { SmartCleanView } from '@/components/SmartCleanView'
 import { SettingsView } from '@/components/SettingsView'
 import { FileAnalyticsView } from '@/components/FileAnalyticsView'
+import { AiCacheView } from '@/components/AiCacheView'
 import { DuplicateView } from '@/components/DuplicateView'
 import { SearchOverlay } from '@/components/SearchOverlay'
 import { FdaModal } from '@/components/FdaModal'
-import { Trash2, AlertCircle, X, HardDrive, Cpu, AppWindow, Search, RefreshCw } from 'lucide-react'
+import { Trash2, AlertCircle, X, HardDrive, AppWindow, Search, RefreshCw } from 'lucide-react'
 
 function App() {
   const [scanning, setScanning] = useState(false)
@@ -58,62 +59,52 @@ function App() {
     }
   }, [])
 
-  // Flatten tree helper
-  const flattenTree = (root: ScanNode): ScanNode[] => {
+  // Smart Clean useMemos
+  const flatFiles = useMemo(() => {
+    if (!scanResult) return []
     const flat: ScanNode[] = []
     const traverse = (node: ScanNode) => {
-      flat.push(node)
-      if (node.children) node.children.forEach(traverse)
-    }
-    traverse(root)
-    return flat
-  }
-
-  // Smart Clean useMemos
-  const largeFiles = useMemo(() => {
-    if (!scanResult) return []
-    const flat = flattenTree(scanResult)
-    // Files > 100MB
-    return flat.filter(n => !n.children && n.size > 100 * 1024 * 1024).sort((a, b) => b.size - a.size)
-  }, [scanResult])
-
-  const aiCaches = useMemo(() => {
-    if (!scanResult) return []
-    const flat = flattenTree(scanResult)
-    const regex = /(gemini|antigravity|ollama|lm-studio|claude|openrouter|chat.?log|context.?file)/i
-    return flat.filter(n => regex.test(n.path) && n.size > 1024 * 1024).sort((a, b) => b.size - a.size)
-  }, [scanResult])
-
-  const leftoverData = useMemo(() => {
-    if (!scanResult || installedApps.length === 0) return []
-    // Look for Application Support and Caches folders
-    const leftovers: ScanNode[] = []
-    
-    const findLeftoversIn = (parentPathContains: string) => {
-      const parent = flattenTree(scanResult).find(n => n.path.endsWith(parentPathContains))
-      if (parent && parent.children) {
-        parent.children.forEach(child => {
-          // If the folder name (lowercased) doesn't fuzzily match any installed app
-          const childNameLower = child.name.toLowerCase()
-          // Very naive check: does any installed app name contain the folder name, or vice versa?
-          const isAppInstalled = installedApps.some(app => 
-            app.includes(childNameLower) || childNameLower.includes(app) || childNameLower.includes(app.replace(/\s+/g, ''))
-          )
-          // Exclude obvious Apple/system ones that aren't matching
-          const isSystem = childNameLower.includes('apple') || childNameLower.includes('crashreporter') || childNameLower.includes('mobilesync')
-          
-          if (!isAppInstalled && !isSystem && child.size > 5 * 1024 * 1024) {
-            leftovers.push(child)
-          }
-        })
+      if (!node.children) {
+        flat.push(node)
+      } else {
+        node.children.forEach(traverse)
       }
     }
+    traverse(scanResult)
+    return flat
+  }, [scanResult])
 
-    findLeftoversIn('Library/Application Support')
-    findLeftoversIn('Library/Caches')
-    
-    return leftovers.sort((a, b) => b.size - a.size)
-  }, [scanResult, installedApps])
+  const largeFiles = useMemo(() => {
+    return flatFiles
+      .filter(f => f.size > 100 * 1024 * 1024)
+      .sort((a, b) => b.size - a.size)
+  }, [flatFiles])
+
+  const aiCaches = useMemo(() => {
+    return flatFiles
+      .filter(f => {
+        const lower = f.path.toLowerCase()
+        return lower.includes('huggingface') || 
+               lower.includes('.cache/lm-studio') ||
+               lower.includes('ollama') ||
+               lower.includes('diffusion') ||
+               lower.includes('cursor') ||
+               lower.includes('copilot')
+      })
+      .sort((a, b) => b.size - a.size)
+  }, [flatFiles])
+
+  const leftoverData = useMemo(() => {
+    return flatFiles
+      .filter(f => {
+        if (!f.path.includes('Library/Application Support') && !f.path.includes('Library/Caches')) return false
+        const parts = f.path.split('/')
+        const appName = parts.find(p => p.includes('.app') || p.includes('com.'))
+        if (!appName) return false
+        return !installedApps.some(app => app.toLowerCase().includes(appName.toLowerCase()))
+      })
+      .sort((a, b) => b.size - a.size)
+  }, [flatFiles, installedApps])
 
   const handleScan = async () => {
     setScanning(true)
@@ -281,51 +272,45 @@ function App() {
                 </div>
               </div>
 
-              {/* Smart Clean Views */}
-              {activeTab === 'duplicates' && (
-                <div className="flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4">
-                  <DuplicateView 
-                    scanResult={scanResult}
-                    onDelete={handleSmartDelete}
-                  />
-                </div>
-              )}
+              {/* Smart Clean Views (Kept mounted, toggled via CSS to prevent re-renders) */}
+              <div className={`flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4 ${activeTab === 'duplicates' ? 'flex' : 'hidden'}`}>
+                <DuplicateView 
+                  scanResult={scanResult}
+                  onDelete={handleSmartDelete}
+                />
+              </div>
 
-              {activeTab === 'large_files' && (
-                <div className="flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4">
-                  <SmartCleanView 
-                    title="Large Files" 
-                    description="Files larger than 100MB taking up significant space."
-                    icon={<HardDrive size={24} />}
-                    items={largeFiles}
-                    onDelete={handleSmartDelete}
-                  />
-                </div>
-              )}
+              <div className={`flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4 ${activeTab === 'large_files' ? 'flex' : 'hidden'}`}>
+                <SmartCleanView 
+                  title="Large Files" 
+                  description="Files larger than 100MB taking up significant space."
+                  icon={<HardDrive size={24} />}
+                  items={largeFiles}
+                  onDelete={handleSmartDelete}
+                />
+              </div>
 
-              {activeTab === 'ai_cache' && (
-                <div className="flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4">
-                  <SmartCleanView 
-                    title="AI Cache & Logs" 
-                    description="Hidden context files and caches from AI agents."
-                    icon={<Cpu size={24} />}
-                    items={aiCaches}
-                    onDelete={handleSmartDelete}
-                  />
-                </div>
-              )}
+              <div className={`flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4 ${activeTab === 'ai_cache' ? 'flex' : 'hidden'}`}>
+                <AiCacheView 
+                  items={aiCaches}
+                  onDelete={handleSmartDelete}
+                />
+              </div>
 
-              {activeTab === 'leftovers' && (
-                <div className="flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4">
-                  <SmartCleanView 
-                    title="App Leftovers" 
-                    description="Application Support and Cache folders for uninstalled apps. (Review carefully)"
-                    icon={<AppWindow size={24} />}
-                    items={leftoverData}
-                    onDelete={handleSmartDelete}
-                  />
-                </div>
-              )}
+              <div className={`flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4 ${activeTab === 'leftovers' ? 'flex' : 'hidden'}`}>
+                <SmartCleanView 
+                  title="App Leftovers" 
+                  description="Data from applications you no longer have installed."
+                  icon={<AppWindow size={24} />}
+                  items={leftoverData}
+                  onDelete={handleSmartDelete}
+                />
+              </div>
+
+              {/* Settings View */}
+              <div className={`flex-1 flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-500 pb-4 ${activeTab === 'settings' ? 'flex' : 'hidden'}`}>
+                <SettingsView />
+              </div>
             </div>
           )}
         </div>
