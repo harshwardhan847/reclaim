@@ -42,10 +42,18 @@ export function SearchOverlay({ data, isOpen, onClose, onDelete }: SearchOverlay
       setResults([])
       return
     }
-    const lowerQuery = query.toLowerCase()
-    // Very fast string match, cap at 50 results to keep DOM fast
-    const matches = flatData.current.filter(n => n.name.toLowerCase().includes(lowerQuery)).slice(0, 50)
-    setResults(matches)
+    const timer = setTimeout(() => {
+      const lowerQuery = query.toLowerCase()
+      const matches: ScanNode[] = []
+      for (const n of flatData.current) {
+        if (n.name.toLowerCase().includes(lowerQuery)) {
+          matches.push(n)
+          if (matches.length >= 50) break
+        }
+      }
+      setResults(matches)
+    }, 200)
+    return () => clearTimeout(timer)
   }, [query])
 
   // Handle global Cmd+K to open

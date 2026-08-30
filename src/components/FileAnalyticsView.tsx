@@ -1,3 +1,4 @@
+import React from 'react';
 import { useMemo } from 'react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
 import { type ScanNode } from './TreemapViewer'
@@ -35,7 +36,28 @@ interface FileAnalyticsViewProps {
   data: ScanNode
 }
 
-export function FileAnalyticsView({ data }: FileAnalyticsViewProps) {
+// Format bytes helper
+const formatSize = (bytes: number) => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+const CustomTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-black/80 backdrop-blur-md border border-white/10 p-3 rounded-lg shadow-xl">
+        <p className="text-white font-medium">{payload[0].name}</p>
+        <p className="text-primary font-bold">{formatSize(payload[0].value)}</p>
+      </div>
+    )
+  }
+  return null
+}
+
+function FileAnalyticsView({ data }: FileAnalyticsViewProps) {
   const analyticsData = useMemo(() => {
     const categories: Record<string, number> = {
       'Videos': 0, 'Images': 0, 'Audio': 0, 'Documents': 0,
@@ -65,27 +87,6 @@ export function FileAnalyticsView({ data }: FileAnalyticsViewProps) {
       }))
       .sort((a, b) => b.size - a.size) // Sort largest first
   }, [data])
-
-  // Format bytes helper
-  const formatSize = (bytes: number) => {
-    if (bytes === 0) return '0 B'
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-  }
-
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-black/80 backdrop-blur-md border border-white/10 p-3 rounded-lg shadow-xl">
-          <p className="text-white font-medium">{payload[0].name}</p>
-          <p className="text-primary font-bold">{formatSize(payload[0].value)}</p>
-        </div>
-      )
-    }
-    return null
-  }
 
   const totalSize = useMemo(() => {
     return analyticsData.reduce((acc, curr) => acc + curr.size, 0)
@@ -146,3 +147,6 @@ export function FileAnalyticsView({ data }: FileAnalyticsViewProps) {
     </div>
   )
 }
+
+export const FileAnalyticsViewMemo = React.memo(FileAnalyticsView);
+export { FileAnalyticsViewMemo as FileAnalyticsView };

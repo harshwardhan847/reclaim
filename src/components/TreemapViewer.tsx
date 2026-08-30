@@ -1,3 +1,4 @@
+import React from 'react';
 import { useEffect, useRef, useState, useMemo } from 'react'
 import * as d3 from 'd3-hierarchy'
 import { scaleOrdinal } from 'd3-scale'
@@ -10,7 +11,7 @@ export interface ScanNode {
   children?: ScanNode[]
 }
 
-export function TreemapViewer({ 
+function TreemapViewer({ 
   data, 
   onStageItem 
 }: { 
@@ -43,16 +44,20 @@ export function TreemapViewer({
     return found || data;
   }, [data, zoomedPath]);
 
+  const rafRef = useRef<number>(0)
   // Observe container size
   useEffect(() => {
     if (!containerRef.current) return
     const observer = new ResizeObserver(entries => {
-      for (const entry of entries) {
-        setDimensions({
-          width: entry.contentRect.width,
-          height: entry.contentRect.height
-        })
-      }
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      rafRef.current = requestAnimationFrame(() => {
+        for (const entry of entries) {
+          setDimensions({
+            width: entry.contentRect.width,
+            height: entry.contentRect.height
+          })
+        }
+      })
     })
     observer.observe(containerRef.current)
     return () => observer.disconnect()
@@ -202,54 +207,59 @@ export function TreemapViewer({
     };
   }, [onStageItem]);
 
+  const pointerRafRef = useRef<number>(0)
   const handlePointerMove = (e: React.PointerEvent) => {
-    // Hover tooltip logic (only if not dragging, global listener handles drag)
-    if (!dragState.current.isDragging) {
-      const rect = canvasRef.current?.getBoundingClientRect();
-      if (rect) {
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        
-        let hoveredNode = null as d3.HierarchyRectangularNode<ScanNode> | null;
-        let maxDepth = -1;
-        layoutNodes.current.forEach(n => {
-          if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1 && n.depth > maxDepth) {
-            hoveredNode = n;
-            maxDepth = n.depth;
-          }
-        });
+    e.persist()
+    if (pointerRafRef.current) cancelAnimationFrame(pointerRafRef.current)
+    pointerRafRef.current = requestAnimationFrame(() => {
+      // Hover tooltip logic (only if not dragging, global listener handles drag)
+      if (!dragState.current.isDragging) {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (rect) {
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+          
+          let hoveredNode = null as d3.HierarchyRectangularNode<ScanNode> | null;
+          let maxDepth = -1;
+          layoutNodes.current.forEach(n => {
+            if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1 && n.depth > maxDepth) {
+              hoveredNode = n;
+              maxDepth = n.depth;
+            }
+          });
 
-        if (tooltipRef.current) {
-          if (hoveredNode && hoveredNode.depth > 0) {
-            const sizeGB = (hoveredNode.data.size / 1e9).toFixed(2);
-            tooltipRef.current.style.display = 'block';
-            tooltipRef.current.style.transform = `translate(${e.clientX + 15}px, ${e.clientY + 15}px)`;
-            tooltipRef.current.innerHTML = `<div class="bg-black/80 text-white px-3 py-2 rounded-lg border border-white/10 backdrop-blur-md shadow-xl text-sm">
-              <p class="font-bold max-w-xs truncate">${hoveredNode.data.name}</p>
-              <p class="text-neutral-400 mt-0.5">${sizeGB} GB</p>
-            </div>`;
-          } else {
-            tooltipRef.current.style.display = 'none';
+          if (tooltipRef.current) {
+            if (hoveredNode && hoveredNode.depth > 0) {
+              const sizeGB = (hoveredNode.data.size / 1e9).toFixed(2);
+              tooltipRef.current.style.display = 'block';
+              tooltipRef.current.style.transform = `translate(${e.clientX + 15}px, ${e.clientY + 15}px)`;
+              tooltipRef.current.innerHTML = `<div class="bg-black/80 text-white px-3 py-2 rounded-lg border border-white/10 backdrop-blur-md shadow-xl text-sm">
+                <p class="font-bold max-w-xs truncate">${hoveredNode.data.name}</p>
+                <p class="text-neutral-400 mt-0.5">${sizeGB} GB</p>
+              </div>`;
+            } else {
+              tooltipRef.current.style.display = 'none';
+            }
           }
         }
       }
-    }
 
-    // Drag start logic
-    if (!dragState.current.node) return;
-    const dx = Math.abs(e.clientX - dragState.current.start.x);
-    const dy = Math.abs(e.clientY - dragState.current.start.y);
-    
-    if (!dragState.current.isDragging && (dx > 5 || dy > 5)) {
-      dragState.current.isDragging = true;
-      if (tooltipRef.current) {
-        tooltipRef.current.style.display = 'flex';
-        tooltipRef.current.innerHTML = `<span class="bg-red-500/20 text-red-100 px-3 py-1.5 rounded-lg border border-red-500/50 backdrop-blur-md shadow-2xl flex items-center gap-2">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><line x1="9" x2="15" y1="13" y2="13"/></svg>
-          Dragging: ${dragState.current.node.data.name}
-        </span>`;
+      // Drag start logic
+      if (!dragState.current.node) return;
+      const dx = Math.abs(e.clientX - dragState.current.start.x);
+      const dy = Math.abs(e.clientY - dragState.current.start.y);
+      
+      if (!dragState.current.isDragging && (dx > 5 || dy > 5)) {
+        dragState.current.isDragging = true;
+        if (tooltipRef.current) {
+          tooltipRef.current.style.display = 'flex';
+          tooltipRef.current.innerHTML = `<span class="bg-red-500/20 text-red-100 px-3 py-1.5 rounded-lg border border-red-500/50 backdrop-blur-md shadow-2xl flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><line x1="9" x2="15" y1="13" y2="13"/></svg>
+            Dragging: ${dragState.current.node.data.name}
+          </span>`;
+        }
       }
-    }
+    })
   };
 
   const handlePointerUp = () => {
@@ -318,3 +328,6 @@ export function TreemapViewer({
     </div>
   )
 }
+
+export const TreemapViewerMemo = React.memo(TreemapViewer);
+export { TreemapViewerMemo as TreemapViewer };

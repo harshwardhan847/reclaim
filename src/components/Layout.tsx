@@ -1,17 +1,25 @@
 import type { ReactNode } from 'react'
-import { LayoutDashboard, ListTree, List, Settings, Trash2, Copy } from 'lucide-react'
+import { LayoutDashboard, ListTree, List, Settings, Trash2, Copy, Code, Monitor, Bot } from 'lucide-react'
 
 export function Layout({ 
   children, 
   activeTab, 
   onTabChange,
-  hasScanned
+  hasScanned,
+  tabSizes
 }: { 
   children: ReactNode;
   activeTab: string;
   onTabChange: (tab: string) => void;
   hasScanned: boolean;
+  tabSizes?: Record<string, number>;
 }) {
+  const formatSize = (bytes: number) => {
+    if (bytes === 0) return ''
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB'
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
+  }
   return (
     <div className="flex h-screen bg-black text-white font-sans overflow-hidden">
       {/* Background gradients */}
@@ -61,6 +69,7 @@ export function Layout({
                 active={activeTab === 'duplicates'}
                 onClick={() => onTabChange('duplicates')}
                 disabled={!hasScanned}
+                badge={tabSizes?.duplicates ? formatSize(tabSizes.duplicates) : undefined}
               />
               <NavItem 
                 icon={<List size={18} />} 
@@ -68,13 +77,15 @@ export function Layout({
                 active={activeTab === 'large_files'}
                 onClick={() => onTabChange('large_files')}
                 disabled={!hasScanned}
+                badge={tabSizes?.large_files ? formatSize(tabSizes.large_files) : undefined}
               />
               <NavItem 
-                icon={<Settings size={18} />} 
+                icon={<Bot size={18} />} 
                 label="AI Cache & Logs" 
                 active={activeTab === 'ai_cache'}
                 onClick={() => onTabChange('ai_cache')}
                 disabled={!hasScanned}
+                badge={tabSizes?.ai_cache ? formatSize(tabSizes.ai_cache) : undefined}
               />
               <NavItem 
                 icon={<Trash2 size={18} />} 
@@ -82,6 +93,27 @@ export function Layout({
                 active={activeTab === 'leftovers'}
                 onClick={() => onTabChange('leftovers')}
                 disabled={!hasScanned}
+                badge={tabSizes?.leftovers ? formatSize(tabSizes.leftovers) : undefined}
+              />
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h3 className="px-3 text-xs font-semibold text-neutral-500 uppercase tracking-wider mb-2">Tools</h3>
+            <div className="space-y-1">
+              <NavItem 
+                icon={<Code size={18} />} 
+                label="Dev Cleanup" 
+                active={activeTab === 'dev_cleanup'}
+                onClick={() => onTabChange('dev_cleanup')}
+                disabled={!hasScanned}
+                badge={tabSizes?.dev_cleanup ? formatSize(tabSizes.dev_cleanup) : undefined}
+              />
+              <NavItem 
+                icon={<Monitor size={18} />} 
+                label="System Info" 
+                active={activeTab === 'system_info'}
+                onClick={() => onTabChange('system_info')}
               />
             </div>
           </div>
@@ -113,13 +145,15 @@ function NavItem({
   label, 
   active = false,
   disabled = false,
-  onClick 
+  onClick,
+  badge
 }: { 
   icon: ReactNode; 
   label: string; 
   active?: boolean;
   disabled?: boolean;
   onClick?: () => void;
+  badge?: string;
 }) {
   return (
     <button 
@@ -134,6 +168,7 @@ function NavItem({
         {icon}
       </div>
       <span className="font-medium text-sm flex-1">{label}</span>
+      {badge && <span className="text-[10px] font-semibold text-neutral-500 bg-white/5 px-1.5 py-0.5 rounded-md">{badge}</span>}
     </button>
   )
 }

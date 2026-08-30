@@ -1,3 +1,4 @@
+import React from 'react';
 import type { ScanNode } from './TreemapViewer'
 import {
   Table,
@@ -10,7 +11,7 @@ import {
 import { FileIcon, FolderIcon, HardDriveIcon, CheckCircle2, ChevronRight, CornerUpLeft } from 'lucide-react'
 import { useState, useMemo } from 'react'
 
-export function FileListView({ data }: { data?: ScanNode | null }) {
+function FileListView({ data }: { data?: ScanNode | null }) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [history, setHistory] = useState<ScanNode[]>([])
 
@@ -106,7 +107,7 @@ export function FileListView({ data }: { data?: ScanNode | null }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {currentFiles.map((file) => (
+            {currentFiles.slice(0, 500).map((file) => (
               <TableRow 
                 key={file.path}
                 className="group border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none"
@@ -151,3 +152,6 @@ export function FileListView({ data }: { data?: ScanNode | null }) {
     </div>
   )
 }
+
+export const FileListViewMemo = React.memo(FileListView);
+export { FileListViewMemo as FileListView };

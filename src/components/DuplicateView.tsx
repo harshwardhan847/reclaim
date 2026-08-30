@@ -1,3 +1,4 @@
+import React from 'react';
 import { useState, useEffect, useMemo } from 'react'
 import { type ScanNode } from './TreemapViewer'
 import { invoke } from '@tauri-apps/api/core'
@@ -10,7 +11,7 @@ interface DuplicateViewProps {
   onDelete: (paths: string[]) => void
 }
 
-export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
+function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.log("DuplicateView Rendered");
   const [loading, setLoading] = useState(false)
   const [duplicateGroups, setDuplicateGroups] = useState<string[][]>([])
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
@@ -29,6 +30,9 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
     setLoading(true)
     setDuplicateGroups([])
     setSelectedPaths(new Set())
+
+    // Yield to the browser so the loading spinner actually appears before we freeze the main thread
+    await new Promise(resolve => setTimeout(resolve, 50))
 
     // 1. Flatten tree and group by exact size (React-side)
     const sizeMap = new Map<number, string[]>()
@@ -59,16 +63,54 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
     try {
       const trueDuplicates: string[][] = await invoke('find_true_duplicates', { sizeGroups: potentialGroups })
       
+      const mediaExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.mp4', '.mov', '.avi', '.mkv', '.mp3', '.wav', '.aac', '.m4a', '.flac'])
+      const finalDuplicates: string[][] = []
+
+      for (const group of trueDuplicates) {
+        const mediaPaths = group.filter(p => {
+          const idx = p.lastIndexOf('.')
+          if (idx === -1) return false
+          const ext = p.substring(idx).toLowerCase()
+          return mediaExts.has(ext)
+        })
+        
+        const nonMediaPaths = group.filter(p => {
+          const idx = p.lastIndexOf('.')
+          if (idx === -1) return true
+          const ext = p.substring(idx).toLowerCase()
+          return !mediaExts.has(ext)
+        })
+
+        // Media files are considered duplicates anywhere
+        if (mediaPaths.length > 1) {
+          finalDuplicates.push(mediaPaths)
+        }
+
+        // Non-media files MUST be in the same parent directory to be considered duplicates
+        const parentMap = new Map<string, string[]>()
+        for (const p of nonMediaPaths) {
+          const parentDir = p.substring(0, p.lastIndexOf('/'))
+          if (!parentMap.has(parentDir)) parentMap.set(parentDir, [])
+          parentMap.get(parentDir)!.push(p)
+        }
+
+        for (const pathsInSameDir of parentMap.values()) {
+          if (pathsInSameDir.length > 1) {
+            finalDuplicates.push(pathsInSameDir)
+          }
+        }
+      }
+
       const pathSizeMap = new Map<string, number>()
       flat.forEach(n => pathSizeMap.set(n.path, n.size))
 
-      trueDuplicates.sort((a, b) => {
+      finalDuplicates.sort((a, b) => {
         const sizeA = pathSizeMap.get(a[0]) || 0
         const sizeB = pathSizeMap.get(b[0]) || 0
         return sizeB - sizeA // largest first
       })
 
-      setDuplicateGroups(trueDuplicates)
+      setDuplicateGroups(finalDuplicates)
     } catch (err) {
       console.error("Error finding duplicates:", err)
     } finally {
@@ -105,48 +147,35 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
     setSelectedPaths(new Set())
   }
 
-  // Calculate total waste
-  const totalWastedSize = useMemo(() => {
-    if (!scanResult) return 0
-    let total = 0
-    
-    const flat: ScanNode[] = []
+  const pathSizeMap = useMemo(() => {
+    const map = new Map<string, number>()
+    if (!scanResult) return map
+
     const traverse = (node: ScanNode) => {
-      flat.push(node)
+      map.set(node.path, node.size)
       if (node.children) node.children.forEach(traverse)
     }
     traverse(scanResult)
+    return map
+  }, [scanResult])
 
-    const pathSizeMap = new Map<string, number>()
-    flat.forEach(n => pathSizeMap.set(n.path, n.size))
-
+  // Calculate total waste
+  const totalWastedSize = useMemo(() => {
+    let total = 0
     duplicateGroups.forEach(group => {
       const size = pathSizeMap.get(group[0]) || 0
       total += size * (group.length - 1)
     })
-    
     return total
-  }, [duplicateGroups, scanResult])
+  }, [duplicateGroups, pathSizeMap])
 
   const selectedSize = useMemo(() => {
-    if (!scanResult) return 0
     let total = 0
-    
-    const flat: ScanNode[] = []
-    const traverse = (node: ScanNode) => {
-      flat.push(node)
-      if (node.children) node.children.forEach(traverse)
-    }
-    traverse(scanResult)
-
-    const pathSizeMap = new Map<string, number>()
-    flat.forEach(n => pathSizeMap.set(n.path, n.size))
-
     Array.from(selectedPaths).forEach(path => {
       total += pathSizeMap.get(path) || 0
     })
     return total
-  }, [selectedPaths, scanResult])
+  }, [selectedPaths, pathSizeMap])
 
   return (
     <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full">
@@ -272,3 +301,6 @@ export function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) {
     </div>
   )
 }
+
+export const DuplicateViewMemo = React.memo(DuplicateView);
+export { DuplicateViewMemo as DuplicateView };

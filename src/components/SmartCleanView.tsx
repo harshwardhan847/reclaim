@@ -1,3 +1,4 @@
+import React from 'react';
 import { type ScanNode } from './TreemapViewer'
 import {
   Table,
@@ -8,7 +9,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { FileIcon, FolderIcon, CheckCircle2, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 
 interface SmartCleanViewProps {
@@ -19,7 +20,7 @@ interface SmartCleanViewProps {
   icon: React.ReactNode
 }
 
-export function SmartCleanView({ title, description, items, onDelete, icon }: SmartCleanViewProps) {
+function SmartCleanView({ title, description, items, onDelete, icon }: SmartCleanViewProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
   // Format bytes to a readable string
@@ -53,9 +54,11 @@ export function SmartCleanView({ title, description, items, onDelete, icon }: Sm
     setSelected(new Set())
   }
 
-  const selectedSize = items
-    .filter(i => selected.has(i.path))
-    .reduce((acc, curr) => acc + curr.size, 0)
+  const selectedSize = useMemo(() => {
+    return items
+      .filter(i => selected.has(i.path))
+      .reduce((acc, curr) => acc + curr.size, 0)
+  }, [selected, items])
 
   return (
     <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full">
@@ -157,3 +160,6 @@ export function SmartCleanView({ title, description, items, onDelete, icon }: Sm
     </div>
   )
 }
+
+export const SmartCleanViewMemo = React.memo(SmartCleanView);
+export { SmartCleanViewMemo as SmartCleanView };

@@ -22,7 +22,7 @@ type AgentGroup = {
   totalSize: number
 }
 
-export function AiCacheView({ items, onDelete }: AiCacheViewProps) {
+function AiCacheView({ items, onDelete }: AiCacheViewProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
@@ -43,12 +43,26 @@ export function AiCacheView({ items, onDelete }: AiCacheViewProps) {
       const lower = item.path.toLowerCase()
       let agent = 'Other AI Tools'
       
-      if (lower.includes('huggingface')) agent = 'HuggingFace'
+      if (lower.includes('huggingface') || lower.includes('hub/models')) agent = 'HuggingFace'
       else if (lower.includes('.cache/lm-studio')) agent = 'LM Studio'
       else if (lower.includes('ollama')) agent = 'Ollama'
-      else if (lower.includes('diffusion')) agent = 'Stable Diffusion'
-      else if (lower.includes('cursor')) agent = 'Cursor IDE'
+      else if (lower.includes('diffusion') || lower.includes('comfyui')) agent = 'Stable Diffusion'
+      else if (lower.includes('/cursor/')) agent = 'Cursor IDE'
       else if (lower.includes('copilot')) agent = 'GitHub Copilot'
+      else if (lower.includes('.gemini') || lower.includes('antigravity') || lower.includes('google-cloud-sdk')) agent = 'Google / Antigravity'
+      else if (lower.includes('claude') || lower.includes('anthropic')) agent = 'Claude / Anthropic'
+      else if (lower.includes('chatgpt') || lower.includes('openai') || lower.includes('com.openai')) agent = 'ChatGPT / OpenAI'
+      else if (lower.includes('codeium')) agent = 'Codeium'
+      else if (lower.includes('tabnine')) agent = 'Tabnine'
+      else if (lower.includes('continue')) agent = 'Continue'
+      else if (lower.includes('cody') || lower.includes('sourcegraph')) agent = 'Sourcegraph Cody'
+      else if (lower.includes('windsurf')) agent = 'Windsurf'
+      else if (lower.includes('aider')) agent = 'Aider'
+      else if (lower.includes('pytorch') || lower.includes('torch')) agent = 'PyTorch'
+      else if (lower.includes('tensorflow') || lower.includes('.keras')) agent = 'TensorFlow'
+      else if (lower.includes('conda') || lower.includes('miniconda') || lower.includes('anaconda')) agent = 'Conda'
+      else if (lower.includes('pip') && lower.includes('cache')) agent = 'pip Cache'
+      else if (lower.includes('jupyter') || lower.includes('.ipynb_checkpoints')) agent = 'Jupyter'
       
       const existing = map.get(agent) || []
       existing.push(item)
@@ -113,9 +127,11 @@ export function AiCacheView({ items, onDelete }: AiCacheViewProps) {
     setSelected(new Set())
   }
 
-  const selectedSize = items
-    .filter(i => selected.has(i.path))
-    .reduce((acc, curr) => acc + curr.size, 0)
+  const selectedSize = useMemo(() => {
+    return items
+      .filter(i => selected.has(i.path))
+      .reduce((acc, curr) => acc + curr.size, 0)
+  }, [selected, items])
 
   return (
     <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full">
@@ -223,10 +239,10 @@ export function AiCacheView({ items, onDelete }: AiCacheViewProps) {
                     </TableRow>
 
                     {/* Children Rows */}
-                    {isExpanded && group.items.map((file, idx) => (
+                    {isExpanded && group.items.slice(0, 200).map((file, idx) => (
                       <TableRow 
                         key={file.path}
-                        className={`group border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none bg-black/40 ${idx === group.items.length - 1 ? 'border-b-[1px]' : 'border-b-0'}`}
+                        className={`group border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none bg-black/40 ${idx === Math.min(group.items.length, 200) - 1 ? 'border-b-[1px]' : 'border-b-0'}`}
                         onClick={(e) => toggleSelectFile(file.path, e)}
                       >
                         <TableCell className="w-12 text-center relative">
@@ -267,3 +283,6 @@ export function AiCacheView({ items, onDelete }: AiCacheViewProps) {
     </div>
   )
 }
+
+export const AiCacheViewMemo = React.memo(AiCacheView);
+export { AiCacheViewMemo as AiCacheView };
