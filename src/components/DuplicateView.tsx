@@ -13,6 +13,7 @@ interface DuplicateViewProps {
 
 function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.log("DuplicateView Rendered");
   const [loading, setLoading] = useState(false)
+  const [hasRun, setHasRun] = useState(false)
   const [duplicateGroups, setDuplicateGroups] = useState<string[][]>([])
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
 
@@ -28,6 +29,7 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
   const runDuplicateScan = async () => {
     if (!scanResult) return
     setLoading(true)
+    setHasRun(true)
     setDuplicateGroups([])
     setSelectedPaths(new Set())
 
@@ -120,7 +122,9 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
 
   // Auto-run when scanResult changes (new disk scan or cache load)
   useEffect(() => {
-    runDuplicateScan()
+    setDuplicateGroups([])
+    setSelectedPaths(new Set())
+    setHasRun(false)
   }, [scanResult])
 
   const toggleSelect = (path: string, e?: React.MouseEvent) => {
@@ -231,6 +235,16 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
       </div>
 
       <div className="overflow-auto flex-1 p-2 custom-scrollbar">
+        {!hasRun && !loading && (
+          <div className="flex flex-col items-center justify-center h-48">
+            <Copy size={40} className="text-neutral-600 mb-4" />
+            <p className="text-white font-medium mb-4">Find Exact Duplicate Files</p>
+            <Button onClick={runDuplicateScan} className="bg-primary hover:bg-primary/90 text-white">
+              Scan for Duplicates
+            </Button>
+          </div>
+        )}
+
         {loading && (
           <div className="flex flex-col items-center justify-center h-48 text-primary">
             <Loader2 size={40} className="animate-spin mb-4" />
@@ -239,7 +253,7 @@ function DuplicateView({ scanResult, onDelete }: DuplicateViewProps) { console.l
           </div>
         )}
 
-        {!loading && duplicateGroups.length === 0 && (
+        {!loading && hasRun && duplicateGroups.length === 0 && (
           <div className="flex flex-col items-center justify-center h-48 text-neutral-500">
             <CheckCircle2 size={48} className="mb-4 text-green-500/50" />
             <p className="text-lg">No duplicate files found!</p>

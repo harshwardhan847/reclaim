@@ -84,7 +84,7 @@ export function SearchOverlay({ data, isOpen, onClose, onDelete }: SearchOverlay
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] px-4 animate-in fade-in duration-200">
+    <div className="absolute inset-0 z-50 flex items-start justify-center pt-[15vh] px-4 animate-in fade-in duration-200">
       {/* Backdrop */}
       <div 
         className="absolute inset-0 bg-black/60 backdrop-blur-md cursor-pointer"

@@ -22,7 +22,7 @@ Build a macOS desktop application that:
 - **Frontend:** React + TypeScript (or Svelte + TypeScript — pick one and stay consistent)
 - **Treemap rendering:** Canvas2D, using `d3-hierarchy`'s `treemap` layout algorithm for the layout math only (draw manually on canvas, do not render as SVG/DOM nodes — performance matters at thousands of rectangles)
 - **Rust core responsibilities:** filesystem traversal, size aggregation, trash/delete operations, duplicate detection (hashing), license validation calls, local data persistence
-- **Local persistence:** SQLite (via `rusqlite`) or flat JSON files — store scan snapshots, exclusion list, license cache metadata, reclaimed-space history
+- **Local persistence:** SQLite (via `rusqlite`) or flat JSON files — store exclusion list and license cache metadata. (Do NOT cache the scan results for reloading after opening; always perform a fresh scan).
 - **Secure license storage:** macOS Keychain (via `security-framework` crate), not a plain file
 - **Auto-updates:** Tauri's built-in updater plugin
 - **Distribution:** Signed with a Developer ID certificate, notarized by Apple, shipped as a `.dmg`. NOT distributed via the Mac App Store (incompatible with non-Apple IAP for a one-time purchase).
@@ -78,12 +78,11 @@ validate_license(cached_key: String) -> Result<LicenseState>
 get_machine_id() -> String
   // Derive from hardware UUID (IOPlatformUUID) for stable per-Mac identity
 
-// Snapshots & stats
-save_scan_snapshot(tree: ScanTree) -> Result<()>
-  // Store a lightweight summary (category totals, top folders) for trend view
-get_scan_history() -> Vec<ScanSnapshotSummary>
-get_reclaimed_space_log() -> Vec<ReclaimedEntry>
-  // Append an entry every time a delete operation succeeds
+// App Uninstaller & Leftovers
+uninstall_app(app_path: String) -> Result<DeleteReport>
+  // Finds and removes an application and all its associated files (~/Library/Containers, Caches, Preferences, etc.)
+find_orphaned_leftovers() -> Vec<OrphanedLeftover>
+  // Detects and lists orphaned Application Support files, Caches, and Preferences from previously deleted apps
 ```
 
 ---
@@ -92,7 +91,7 @@ get_reclaimed_space_log() -> Vec<ReclaimedEntry>
 
 ### 4.1 Free tier (all scanning/visibility features, no deletion)
 - Scan: full disk, specific volume, or chosen folder — user picks at scan start
-- Treemap canvas view (primary) + sortable list/table view (toggle between them)
+- Treemap canvas view (primary) + sortable list/table view (toggle between them). The canvas view should take up the full screen area, with stats displayed in a sidebar.
 - Click a rectangle → breadcrumb path, size, item count, last modified date
 - Drill-down navigation (double-click into folder, breadcrumb to go back up)
 - Color-code rectangles by category: Apps, Documents, Media, System, Caches, Dev artifacts, AI tool data, Other
@@ -108,18 +107,16 @@ get_reclaimed_space_log() -> Vec<ReclaimedEntry>
 - Session-level undo for the last delete batch
 - Exclusion list — user can mark paths "never suggest for deletion," persisted across scans
 - Duplicate cleanup with "keep newest/oldest" auto-select + manual override
+- **Dedicated App Uninstaller:** Cleanly remove applications along with their associated files, caches, and preferences.
+- **Orphaned Leftovers Cleanup:** Detect and remove orphaned `Application Support` and preference files from apps deleted years ago.
 - System junk categories: app caches/logs, old iOS backups, Xcode DerivedData/simulators, Docker images/volumes, package manager caches (npm/pip/cargo/Homebrew/yarn/pnpm), stale `node_modules`/`.build`/`target`/`dist` folders
 - **AI tool cache cleanup module** (flagship feature): per-tool breakdown (Claude Code, Codex CLI, Cursor, OpenRouter-based tools, ChatGPT desktop, etc.), selective purge by age or manual session selection
 - Scheduled/background weekly scans with notifications if a folder grew unusually or free space dropped below a threshold
-- Stats dashboard depth: space-reclaimed history log, disk usage trend over time, scan-to-scan comparison ("since last scan, X grew by Y")
 
-### 4.3 Stats dashboard (free baseline, deepens with paid)
-- Storage overview: used/free/total per volume as a ring or bar chart, visible on app launch before any manual scan action
+### 4.3 Stats sidebar dashboard (free baseline, deepens with paid)
+- Storage overview: used/free/total per volume as a ring or bar chart, visible in the sidebar
 - Category breakdown: donut or bar chart across the categories listed above
 - Top 10 largest folders, top 10 largest files
-- (Paid) Reclaimed-space running total + history log of what was deleted and when
-- (Paid) Trend line of disk usage across periodic snapshots
-- (Paid) Scan comparison view highlighting what's new/grown since last scan
 
 ---
 
@@ -155,9 +152,7 @@ get_reclaimed_space_log() -> Vec<ReclaimedEntry>
 ---
 
 ## 8. Data Persistence (local, no backend required beyond license validation + manifest fetch)
-- Scan snapshots (for trend/comparison view): SQLite or JSON, timestamped
 - Exclusion list: SQLite or JSON
-- Reclaimed-space log: append-only list of {date, paths, size, category}
 - License cache: macOS Keychain only
 - AI tool cache manifest: fetched remotely with a bundled local fallback copy shipped in the app
 

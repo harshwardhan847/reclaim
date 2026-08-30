@@ -69,7 +69,27 @@ async fn scan_path(window: tauri::Window, path: String, exclusions: Option<Vec<S
         let mut total_scanned_bytes = 0u64;
         let mut total_files = 0u32;
         
-        let exclusions_list = exclusions.unwrap_or_default();
+        let mut exclusions_list = exclusions.unwrap_or_default();
+        
+        // Add macOS default exclusions to prevent APFS firmlink loops and external mount double-counting
+        if path == "/" {
+            let default_mac_exclusions = vec![
+                "/System/Volumes".to_string(), // APFS Firmlinks data volume (prevents 2x counting)
+                "/Volumes".to_string(),        // External drives / network mounts
+                "/dev".to_string(),
+                "/Network".to_string(),
+                "/net".to_string(),
+                "/home".to_string(),           // auto_home mounts
+                "/.Spotlight-V100".to_string(),
+                "/.fseventsd".to_string(),
+            ];
+            for ex in default_mac_exclusions {
+                if !exclusions_list.contains(&ex) {
+                    exclusions_list.push(ex);
+                }
+            }
+        }
+        
         let exclusions_for_walk = exclusions_list.clone();
         
         for entry in jwalk::WalkDir::new(&path)
@@ -145,26 +165,33 @@ async fn scan_path(window: tauri::Window, path: String, exclusions: Option<Vec<S
         }
         
         let tree = build_tree(Path::new(&path), &path_sizes, &dir_children);
-        
-        // Serialize and save to cache via a small background task so we don't block
-        let json_bytes = serde_json::to_vec(&tree).unwrap_or_default();
-        tauri::async_runtime::spawn_blocking(move || {
-            if let Some(cache_path) = get_cache_path() {
-                let tmp_path = cache_path.with_extension("json.tmp");
-                if let Ok(mut file) = std::fs::File::create(&tmp_path) {
-                    use std::io::Write;
-                    if file.write_all(&json_bytes).is_ok() {
-                        let _ = std::fs::rename(&tmp_path, &cache_path);
-                        println!("Background: Cache saved successfully");
-                    }
-                }
-            }
-        });
-
         Ok(tree)
     })
     .await
     .unwrap_or_else(|_| Err("Scan panicked".to_string()))
+}
+
+#[tauri::command]
+fn get_home_dir() -> String {
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/".to_string())
+}
+
+#[tauri::command]
+async fn reveal_in_finder(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .status();
+        match status {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| Err("Reveal task failed".to_string()))
 }
 
 #[tauri::command]
@@ -295,37 +322,32 @@ async fn find_true_duplicates(size_groups: Vec<Vec<String>>) -> Result<Vec<Vec<S
     .unwrap_or_else(|_| Err("Background task failed".to_string()))
 }
 
-fn get_cache_path() -> Option<PathBuf> {
-    dirs::cache_dir().map(|mut p| {
-        p.push("com.reclaim.app");
-        std::fs::create_dir_all(&p).ok();
-        p.push("latest_scan.json");
-        p
-    })
+#[derive(Serialize)]
+struct DeleteReport {
+    deleted_paths: Vec<String>,
+    total_size: u64,
 }
 
 #[tauri::command]
-async fn get_scan_cache() -> Result<Option<ScanNode>, String> {
-    if let Some(cache_path) = get_cache_path() {
-        if cache_path.exists() {
-            // Use spawn_blocking for heavy file I/O and JSON parsing
-            return tauri::async_runtime::spawn_blocking(move || {
-                if let Ok(file) = std::fs::File::open(cache_path) {
-                    let reader = std::io::BufReader::new(file);
-                    if let Ok(node) = serde_json::from_reader(reader) {
-                        println!("Cache loaded successfully!");
-                        return Ok(Some(node));
-                    } else {
-                        println!("Failed to parse cache JSON. It might be corrupted from an interrupted save.");
-                    }
-                } else {
-                    println!("Failed to open cache file.");
-                }
-                Ok(None)
-            }).await.unwrap_or(Ok(None));
-        }
-    }
-    Ok(None)
+async fn uninstall_app(app_path: String) -> Result<DeleteReport, String> {
+    // Stub implementation for uninstaller
+    println!("Uninstalling app: {}", app_path);
+    Ok(DeleteReport {
+        deleted_paths: vec![app_path],
+        total_size: 0,
+    })
+}
+
+#[derive(Serialize)]
+struct OrphanedLeftover {
+    path: String,
+    size: u64,
+}
+
+#[tauri::command]
+async fn find_orphaned_leftovers() -> Result<Vec<OrphanedLeftover>, String> {
+    // Stub implementation for orphaned leftovers detection
+    Ok(vec![])
 }
 
 #[tauri::command]
@@ -490,12 +512,16 @@ async fn find_dev_directories(path: String) -> Result<Vec<DevDirectory>, String>
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             scan_path, 
+            get_home_dir,
+            reveal_in_finder,
             move_to_trash,
             get_installed_apps,
             find_true_duplicates,
-            get_scan_cache,
+            uninstall_app,
+            find_orphaned_leftovers,
             check_fda_status,
             open_fda_settings,
             get_system_info,

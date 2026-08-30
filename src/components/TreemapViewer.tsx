@@ -109,16 +109,15 @@ function TreemapViewer({
     layoutNodes.current.forEach(node => {
       if (node.depth === 0) return;
       
-      // Depth restriction: limit rendering to 3 levels deep from current root
-      if (node.depth > 3) return;
+      // Removed artificial depth restriction to show full folder depth
       
       const x = node.x0;
       const y = node.y0;
       const w = node.x1 - node.x0;
       const h = node.y1 - node.y0;
 
-      // Culling: Skip tiny rectangles to save render time
-      if (w < 3 || h < 3) return;
+      // Aggressive culling: Skip very small rectangles to keep it performant
+      if (w < 5 || h < 5) return;
 
       // Unique color based on node's own path instead of parent's
       ctx.fillStyle = colorScale(node.data.path);
@@ -156,7 +155,7 @@ function TreemapViewer({
     const y = e.clientY - rect.top;
 
     // Find deepest node at (x,y)
-    let clickedNode: d3.HierarchyRectangularNode<ScanNode> | null = null;
+    let clickedNode: any = null;
     let maxDepth = -1;
     layoutNodes.current.forEach(n => {
       if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1 && n.depth > maxDepth) {
@@ -231,11 +230,15 @@ function TreemapViewer({
           if (tooltipRef.current) {
             if (hoveredNode && hoveredNode.depth > 0) {
               const sizeGB = (hoveredNode.data.size / 1e9).toFixed(2);
+              const sizeMB = (hoveredNode.data.size / 1e6).toFixed(2);
+              const sizeStr = hoveredNode.data.size > 1e9 ? `${sizeGB} GB` : `${sizeMB} MB`;
+              
               tooltipRef.current.style.display = 'block';
               tooltipRef.current.style.transform = `translate(${e.clientX + 15}px, ${e.clientY + 15}px)`;
-              tooltipRef.current.innerHTML = `<div class="bg-black/80 text-white px-3 py-2 rounded-lg border border-white/10 backdrop-blur-md shadow-xl text-sm">
-                <p class="font-bold max-w-xs truncate">${hoveredNode.data.name}</p>
-                <p class="text-neutral-400 mt-0.5">${sizeGB} GB</p>
+              tooltipRef.current.innerHTML = `<div class="bg-black/90 text-white px-3 py-2 rounded-lg border border-white/10 backdrop-blur-md shadow-xl text-sm max-w-sm break-all">
+                <p class="font-bold text-white mb-1">${hoveredNode.data.name}</p>
+                <p class="text-xs text-neutral-400 mb-1 leading-tight">${hoveredNode.data.path}</p>
+                <p class="text-primary font-semibold">${sizeStr}</p>
               </div>`;
             } else {
               tooltipRef.current.style.display = 'none';
@@ -266,16 +269,34 @@ function TreemapViewer({
     const { isDragging, node } = dragState.current;
     if (!node) return;
     
-    // If not dragging, it's a click to zoom
-    if (!isDragging && node.children) {
-      setZoomedPath(node.data.path);
-    }
+    // Zoom removed as per user request
     
-    // If we were dragging, the global windowUp listener will handle the drop.
-    // However, if we drop strictly inside the canvas without capturing over trash,
-    // we still need to reset state.
     if (!isDragging) {
       dragState.current = { isDragging: false, start: {x: 0, y: 0}, node: null };
+    }
+  };
+
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, node: ScanNode } | null>(null);
+
+  const handleContextMenu = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    let clickedNode: any = null;
+    let maxDepth = -1;
+    layoutNodes.current.forEach(n => {
+      if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1 && n.depth > maxDepth) {
+        clickedNode = n;
+        maxDepth = n.depth;
+      }
+    });
+
+    if (clickedNode) {
+      if (tooltipRef.current) tooltipRef.current.style.display = 'none';
+      setContextMenu({ x, y, node: clickedNode.data });
     }
   };
 
@@ -288,21 +309,28 @@ function TreemapViewer({
   };
 
   return (
-    <div className="w-full h-full flex flex-col space-y-2">
-      {/* Zoom controls */}
-      {zoomedPath && data && zoomedPath !== data.path && (
-        <div className="flex items-center space-x-2">
-          <button 
-            onClick={() => setZoomedPath(null)}
-            className="px-3 py-1 text-sm bg-white/10 hover:bg-white/20 rounded-lg backdrop-blur text-white transition-colors"
-          >
-            ← Back to Overview
-          </button>
-          <span className="text-sm text-white/50 truncate max-w-xl" title={zoomedPath}>
-            {zoomedPath.split('/').pop()}
-          </span>
+    <div className="w-full h-full flex flex-col space-y-2 relative">
+      <div className="flex justify-between items-center w-full pb-1">
+        <div>
+          {zoomedPath && data && zoomedPath !== data.path && (
+            <div className="flex items-center space-x-2 z-20 relative">
+              <button 
+                onClick={() => setZoomedPath(null)}
+                className="px-3 py-1 text-sm bg-white/10 hover:bg-white/20 rounded-lg backdrop-blur text-white transition-colors pointer-events-auto"
+              >
+                ← Back to Overview
+              </button>
+              <span className="text-sm text-white/50 truncate max-w-xl" title={zoomedPath}>
+                {zoomedPath.split('/').pop()}
+              </span>
+            </div>
+          )}
         </div>
-      )}
+        <div className="text-xs font-semibold text-neutral-400 flex items-center gap-2 opacity-75">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          Right-click any block for options, or drag to the trash cart
+        </div>
+      </div>
 
       {/* Hover/Drag Tooltip Portal */}
       <div 
@@ -313,17 +341,76 @@ function TreemapViewer({
       {/* Canvas Container */}
       <div 
         ref={containerRef} 
-        className="flex-1 w-full relative rounded-xl overflow-hidden glass border border-white/5 shadow-2xl cursor-pointer"
+        className="flex-1 w-full relative rounded-xl overflow-hidden glass border border-white/5 shadow-2xl cursor-default"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerLeave}
+        onContextMenu={handleContextMenu}
       >
         <canvas 
           ref={canvasRef} 
           className="w-full h-full object-cover"
         />
-        {/* Custom drag ghost could be positioned absolutely here using React state */}
+        {/* React-based Context Menu Overlay */}
+        {contextMenu && (
+          <div 
+            className="absolute inset-0 z-50 pointer-events-auto" onPointerMove={(e) => e.stopPropagation()} 
+            onClick={() => setContextMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
+          >
+            <div 
+              className="absolute bg-neutral-900 border border-white/10 shadow-[0_10px_40px_rgba(0,0,0,0.8)] rounded-xl py-1 w-48 text-sm animate-in fade-in zoom-in-95 duration-100"
+              style={{ top: contextMenu.y, left: contextMenu.x }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-3 py-2 border-b border-white/5 mb-1 bg-black/20">
+                 <span className="text-xs font-semibold text-neutral-400 truncate block w-full" title={contextMenu.node.name}>
+                   {contextMenu.node.name}
+                 </span>
+              </div>
+              <button 
+                className="w-full text-left px-4 py-2 hover:bg-primary/20 hover:text-white transition-colors"
+                onClick={async () => {
+                  setContextMenu(null);
+                  const { invoke } = await import('@tauri-apps/api/core');
+                  try {
+                    await invoke('reveal_in_finder', { path: contextMenu.node.path });
+                  } catch (e) {
+                    console.error(e);
+                  }
+                }}
+              >
+                Reveal in Finder
+              </button>
+              <button 
+                className="w-full text-left px-4 py-2 hover:bg-white/10 text-white transition-colors"
+                onClick={() => {
+                  setContextMenu(null);
+                  if (onStageItem) onStageItem(contextMenu.node);
+                }}
+              >
+                Add to Trash Cart
+              </button>
+              <div className="h-px bg-white/5 my-1 mx-2" />
+              <button 
+                className="w-full text-left px-4 py-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 transition-colors"
+
+                onClick={async () => {
+                  setContextMenu(null);
+                  const { invoke } = await import('@tauri-apps/api/core');
+                  try {
+                    await invoke('move_to_trash', { paths: [contextMenu.node.path] });
+                  } catch (err) {
+                    alert(`Error deleting: ${err}`);
+                  }
+                }}
+              >
+                Move to Trash
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

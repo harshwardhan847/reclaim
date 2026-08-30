@@ -7,14 +7,12 @@ import { Layout } from '@/components/Layout'
 import { FileListView } from '@/components/FileListView'
 import { SmartCleanView } from '@/components/SmartCleanView'
 import { SettingsView } from '@/components/SettingsView'
-import { FileAnalyticsView } from '@/components/FileAnalyticsView'
 import { AiCacheView } from '@/components/AiCacheView'
 import { DuplicateView } from '@/components/DuplicateView'
 import { SearchOverlay } from '@/components/SearchOverlay'
 import { FdaModal } from '@/components/FdaModal'
 import { DevCleanupView } from '@/components/DevCleanupView'
 import { SystemInfoView } from '@/components/SystemInfoView'
-import { ReclaimBanner } from '@/components/ReclaimBanner'
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
 import { Trash2, Loader2, AlertCircle, X, HardDrive, AppWindow, Search, RefreshCw } from 'lucide-react'
 
@@ -57,15 +55,7 @@ function App() {
       .then(apps => setInstalledApps(apps))
       .catch(console.error)
       
-    // Try to load cached scan tree instantly
-    invoke<ScanNode | null>('get_scan_cache')
-      .then(cached => {
-        if (cached) {
-          setScanResult(cached)
-        }
-      })
-      .catch(console.error)
-      .finally(() => setIsInitializing(false))
+    setIsInitializing(false)
 
     const unlisten = listen<number>('scan_progress', (event) => {
       setScannedBytes(event.payload)
@@ -138,9 +128,12 @@ function App() {
   
   const { flatFiles, largeFiles, aiCaches, leftoverData } = derivedData
 
-  const handleScan = async () => {
+  const handleScan = async (overrideTarget?: string) => {
+    if (scanning) return;
+    setActiveTab('overview')
     setScanning(true)
     setScannedBytes(0)
+    const targetPath = overrideTarget || scanTarget;
     try {
       let exclusions = [];
       const saved = localStorage.getItem('reclaim_exclusions');
@@ -149,16 +142,43 @@ function App() {
       }
 
       const result = await invoke<ScanNode>('scan_path', { 
-        path: scanTarget,
+        path: targetPath,
         exclusions 
       })
       setScanResult(result)
+      
     } catch (err) {
       console.error(err)
     } finally {
       setScanning(false)
     }
   }
+
+  const handleNewScan = async (type: 'full' | 'home' | 'custom') => {
+    let target = '/';
+    if (type === 'home') {
+      try {
+        target = await invoke('get_home_dir') || '/Users/harshwardhan';
+      } catch (e) { target = '/Users/harshwardhan'; }
+    } else if (type === 'custom') {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const selected = await open({ directory: true, title: 'Select folder to scan' })
+        if (selected) {
+          target = selected as string;
+        } else {
+          return;
+        }
+      } catch (e) {
+        const path = prompt('Enter path to scan:', scanTarget);
+        if (path) target = path;
+        else return;
+      }
+    }
+    setScanTarget(target);
+    handleScan(target);
+  }
+
 
   const handleStageItem = (node: ScanNode) => {
     if (!stagedDeletes.find(n => n.path === node.path)) {
@@ -225,17 +245,24 @@ function App() {
   return (
     <>
       <FdaModal />
-      <Layout activeTab={activeTab} onTabChange={(tab) => {
-        startTransition(() => {
-          setActiveTab(tab);
-        });
-      }} hasScanned={!!scanResult} tabSizes={tabSizes}>
+      <Layout 
+        activeTab={activeTab} 
+        onTabChange={(tab) => {
+          startTransition(() => {
+            setActiveTab(tab);
+          });
+        }} 
+        hasScanned={!!scanResult} 
+        tabSizes={tabSizes}
+        onNewScan={handleNewScan}
+        isScanning={scanning}
+      >
         <div className="flex flex-col h-full relative">
         <header className="absolute top-0 right-8 z-50 flex items-center h-10 mt-2 space-x-3">
           {scanResult && (
             <>
               <button 
-                onClick={handleScan}
+                onClick={() => handleScan()}
                 className="flex items-center space-x-2 text-neutral-400 hover:text-white bg-black/40 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/5 transition-all text-sm backdrop-blur-md"
                 title="Rescan Drive"
               >
@@ -284,14 +311,15 @@ function App() {
                 <button
                   onClick={async () => {
                     try {
-                      const moduleName = '@tauri-apps/plugin-dialog';
-                      const { open } = await import(/* @vite-ignore */ moduleName);
+                      const { open } = await import('@tauri-apps/plugin-dialog');
                       const selected = await open({ directory: true, title: 'Select folder to scan' })
                       if (selected) setScanTarget(selected as string)
                     } catch (e) {
-                      // Fallback: just use a prompt
+                      console.error("Dialog error:", e);
                       const path = prompt('Enter path to scan:', scanTarget)
-                      if (path) setScanTarget(path)
+                      if (path) {
+                        setScanTarget(path)
+                      }
                     }
                   }}
                   className="text-xs text-primary hover:text-red-400 underline"
@@ -301,8 +329,9 @@ function App() {
               </div>
 
               <Button 
+                id="start-scan-btn"
                 className="text-lg h-14 px-8 rounded-xl bg-primary hover:bg-primary/90 text-white shadow-[0_0_20px_rgba(220,38,38,0.3)] hover:shadow-[0_0_30px_rgba(220,38,38,0.5)] transition-all duration-300 transform hover:scale-[1.02]"
-                onClick={handleScan}
+                onClick={() => handleScan()}
               >
                 Start Full Scan
               </Button>
@@ -318,13 +347,13 @@ function App() {
           )}
 
           {activeTab === 'settings' && (
-            <div className="flex-1 pb-4 h-full">
+            <div className="flex-1 pb-4 h-full overflow-y-auto">
               <SettingsView />
             </div>
           )}
 
           {activeTab === 'system_info' && (
-            <div className="flex-1 pb-4 h-full">
+            <div className="flex-1 pb-4 h-full overflow-y-auto">
               <SystemInfoView />
             </div>
           )}
@@ -339,30 +368,11 @@ function App() {
           )}
 
           {/* Persisted Views */}
-          {scanResult && !scanning && activeTab !== 'settings' && (
+          {scanResult && !scanning && activeTab !== 'settings' && activeTab !== 'system_info' && (
             <div className="flex-1 min-h-0 relative flex flex-col pt-4">
               
               {/* Treemap View */}
-              <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'overview' ? 'flex' : 'hidden'}`}>
-                <ReclaimBanner
-                  duplicateWaste={0}
-                  aiCacheSize={tabSizes.ai_cache}
-                  largeFilesSize={tabSizes.large_files}
-                  leftoverSize={tabSizes.leftovers}
-                  onReclaimCategory={(cat: string) => {
-                    startTransition(() => setActiveTab(cat === 'all' ? 'overview' : cat))
-                  }}
-                />
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-xl font-semibold">Space Distribution</h3>
-                  <p className="text-gray-400 text-sm">Drag boxes from the canvas to the radar trash icon</p>
-                </div>
-                
-                {/* File Type Analytics Dashboard */}
-                <div className="h-48 mb-4 shrink-0 animate-in slide-in-from-top-4 duration-700 fade-in">
-                  <FileAnalyticsView data={scanResult} />
-                </div>
-
+              <div className={`flex-1 flex flex-col min-h-0 ${activeTab === 'overview' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 min-h-0">
                   <TreemapViewer data={scanResult} onStageItem={handleStageItem} />
                 </div>
@@ -380,49 +390,54 @@ function App() {
 
               {/* Smart Clean Views (Kept mounted, toggled via CSS to prevent re-renders) */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'duplicates' ? 'flex' : 'hidden'}`}>
-                <DuplicateView 
+                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                  <DuplicateView 
                   scanResult={scanResult}
                   onDelete={handleSmartDelete}
                 />
+                </div>
               </div>
 
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'large_files' ? 'flex' : 'hidden'}`}>
-                <SmartCleanView 
+                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                  <SmartCleanView 
                   title="Large Files" 
                   description="Files larger than 100MB taking up significant space."
                   icon={<HardDrive size={24} />}
                   items={largeFiles}
                   onDelete={handleSmartDelete}
                 />
+                </div>
               </div>
 
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'ai_cache' ? 'flex' : 'hidden'}`}>
-                <AiCacheView 
+                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                  <AiCacheView 
                   items={aiCaches}
                   onDelete={handleSmartDelete}
                 />
+                </div>
               </div>
 
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'leftovers' ? 'flex' : 'hidden'}`}>
-                <SmartCleanView 
+                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                  <SmartCleanView 
                   title="App Leftovers" 
                   description="Data from applications you no longer have installed."
                   icon={<AppWindow size={24} />}
                   items={leftoverData}
                   onDelete={handleSmartDelete}
                 />
+                </div>
               </div>
 
               {/* Dev Cleanup */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'dev_cleanup' ? 'flex' : 'hidden'}`}>
-                <DevCleanupView onDelete={handleSmartDelete} />
+                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                  <DevCleanupView onDelete={handleSmartDelete} />
+                </div>
               </div>
-
-              {/* Settings View */}
-              <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'settings' ? 'flex' : 'hidden'}`}>
-                <SettingsView />
-              </div>
-            </div>
+</div>
           )}
         </div>
 
