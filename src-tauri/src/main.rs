@@ -14,24 +14,72 @@ struct ScanNode {
     children: Option<Vec<ScanNode>>,
 }
 
-#[tauri::command]
-async fn scan_path(window: tauri::Window, path: String) -> Result<ScanNode, String> {
-    let mut root_node = ScanNode {
-        path: path.clone(),
-        name: Path::new(&path).file_name().unwrap_or_default().to_string_lossy().into_owned(),
-        size: 0,
-        children: Some(Vec::new()),
-    };
+fn is_protected_path(path_str: &str) -> bool {
+    let protected_roots = [
+        "/System",
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/etc",
+        "/var",
+        "/private",
+        "/cores",
+        "/Network",
+    ];
 
+    let exact_protected = [
+        "/",
+        "/Applications",
+        "/Library",
+        "/Users",
+        "/Volumes",
+    ];
+
+    if protected_roots.iter().any(|&p| path_str == p || path_str.starts_with(&format!("{}/", p))) {
+        return true;
+    }
+
+    if exact_protected.iter().any(|&p| path_str == p) {
+        return true;
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let user_home = home.to_string_lossy().to_string();
+        let user_lib = format!("{}/Library", user_home);
+        
+        // Prevent deleting entire home directory
+        if path_str == user_home {
+            return true;
+        }
+        
+        // Prevent deleting exact user Library root (cache/support deletions inside are fine)
+        if path_str == user_lib {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[tauri::command]
+async fn scan_path(window: tauri::Window, path: String, exclusions: Option<Vec<String>>) -> Result<ScanNode, String> {
     let mut path_sizes: HashMap<PathBuf, u64> = HashMap::new();
     let mut dir_children: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
     let mut total_scanned_bytes = 0u64;
     let mut total_files = 0u32;
     
+    let exclusions_list = exclusions.unwrap_or_default();
+    
     for entry in jwalk::WalkDir::new(&path).skip_hidden(false) {
         if let Ok(entry) = entry {
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let current_str = entry.path().to_string_lossy().to_string();
             
+            // Skip excluded paths
+            if exclusions_list.iter().any(|ex| current_str.starts_with(ex)) {
+                continue;
+            }
+
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             let parent = entry.path().parent().map(|p| p.to_path_buf());
             let current = entry.path();
             
@@ -78,7 +126,10 @@ async fn scan_path(window: tauri::Window, path: String) -> Result<ScanNode, Stri
             }
             
             node.size = total_size;
-            node.children = Some(child_nodes);
+            // Only assign children array if there are children, to optimize JSON and UI
+            if !child_nodes.is_empty() {
+                node.children = Some(child_nodes);
+            }
         } else {
             node.size = *sizes.get(current).unwrap_or(&0);
         }
@@ -93,6 +144,12 @@ async fn scan_path(window: tauri::Window, path: String) -> Result<ScanNode, Stri
 #[tauri::command]
 fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
     for path in paths {
+        if is_protected_path(&path) {
+            let err = format!("Access Denied: '{}' is a protected macOS system path and cannot be deleted.", path);
+            eprintln!("{}", err);
+            return Err(err);
+        }
+        
         if let Err(e) = trash::delete(&path) {
             eprintln!("Failed to move to trash: {} - {}", path, e);
             return Err(e.to_string());

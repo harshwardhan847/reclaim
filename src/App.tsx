@@ -6,6 +6,8 @@ import { TreemapViewer, type ScanNode } from '@/components/TreemapViewer'
 import { Layout } from '@/components/Layout'
 import { FileListView } from '@/components/FileListView'
 import { SmartCleanView } from '@/components/SmartCleanView'
+import { SettingsView } from '@/components/SettingsView'
+import { FileAnalyticsView } from '@/components/FileAnalyticsView'
 import { Trash2, AlertCircle, X, HardDrive, Cpu, AppWindow } from 'lucide-react'
 
 function App() {
@@ -92,7 +94,16 @@ function App() {
     setScanning(true)
     setScannedBytes(0)
     try {
-      const result = await invoke<ScanNode>('scan_path', { path: '/Users/harshwardhan' })
+      let exclusions = [];
+      const saved = localStorage.getItem('reclaim_exclusions');
+      if (saved) {
+        try { exclusions = JSON.parse(saved); } catch (e) {}
+      }
+
+      const result = await invoke<ScanNode>('scan_path', { 
+        path: '/Users/harshwardhan',
+        exclusions 
+      })
       setScanResult(result)
     } catch (err) {
       console.error(err)
@@ -154,7 +165,7 @@ function App() {
         </header>
 
         <div className="flex-1 relative z-10 flex flex-col min-h-0 overflow-hidden">
-          {!scanResult && !scanning && (
+          {!scanResult && !scanning && activeTab !== 'settings' && (
             <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-white/10 rounded-2xl bg-black/20 backdrop-blur-sm">
               <div className="w-24 h-24 mb-6 rounded-full bg-gradient-to-br from-primary/20 to-red-900/40 flex items-center justify-center">
                 <Trash2 size={40} className="text-primary" />
@@ -179,8 +190,14 @@ function App() {
             </div>
           )}
 
+          {activeTab === 'settings' && (
+            <div className="flex-1 animate-in fade-in zoom-in-95 duration-500 pb-4 h-full">
+              <SettingsView />
+            </div>
+          )}
+
           {/* Persisted Views */}
-          {scanResult && !scanning && (
+          {scanResult && !scanning && activeTab !== 'settings' && (
             <div className="flex-1 min-h-0 relative flex flex-col pt-4">
               
               {/* Treemap View */}
@@ -189,6 +206,12 @@ function App() {
                   <h3 className="text-xl font-semibold">Space Distribution</h3>
                   <p className="text-gray-400 text-sm">Drag boxes from the canvas to the radar trash icon</p>
                 </div>
+                
+                {/* File Type Analytics Dashboard */}
+                <div className="h-48 mb-4 shrink-0 animate-in slide-in-from-top-4 duration-700 fade-in">
+                  <FileAnalyticsView data={scanResult} />
+                </div>
+
                 <div className="flex-1 min-h-0">
                   <TreemapViewer data={scanResult} onStageItem={handleStageItem} />
                 </div>
