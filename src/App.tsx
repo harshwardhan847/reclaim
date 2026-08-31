@@ -17,7 +17,7 @@ import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { type LicenseState } from '@/components/LicenseView'
 import { UpgradeModal } from '@/components/UpgradeModal'
-import { Trash2, AlertCircle, X, HardDrive, AppWindow, Search, RefreshCw } from 'lucide-react'
+import { Trash2, AlertCircle, X, HardDrive, AppWindow } from 'lucide-react'
 
 interface ScanSummary {
   tree: ScanNode
@@ -252,31 +252,10 @@ function App() {
         isScanning={scanning}
         isPro={!!license?.canUsePaidFeatures}
         onUpgrade={() => setUpgradeBenefit('all cleanup features')}
+        onSearch={() => setIsSearchOpen(true)}
+        onRescan={() => handleScan()}
       >
         <div className="flex flex-col h-full relative">
-        <header className="absolute top-0 right-8 z-50 flex items-center h-10 mt-2 space-x-3">
-          {scanResult && (
-            <>
-              <button
-                onClick={() => handleScan()}
-                className="flex items-center space-x-2 text-neutral-400 hover:text-white bg-black/40 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/5 transition-all text-sm backdrop-blur-md"
-                title="Rescan Drive"
-              >
-                <RefreshCw size={16} className={scanning ? 'animate-spin text-primary' : ''} />
-                <span>{scanning ? 'Scanning...' : 'Rescan'}</span>
-              </button>
-              <button
-                onClick={() => setIsSearchOpen(true)}
-                className="flex items-center space-x-2 text-neutral-400 hover:text-white bg-black/40 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/5 transition-all text-sm backdrop-blur-md"
-              >
-                <Search size={16} />
-                <span>Search</span>
-                <kbd className="ml-2 font-sans bg-white/10 px-1.5 rounded text-[10px]">⌘K</kbd>
-              </button>
-            </>
-          )}
-        </header>
-
         <SearchOverlay
           data={scanResult}
           isOpen={isSearchOpen}
@@ -284,7 +263,7 @@ function App() {
           onDelete={(node) => handleSmartDelete([{ path: node.path, size: node.size }])}
         />
 
-        <div className="flex-1 relative z-10 flex flex-col min-h-0 overflow-hidden pt-12">
+        <div className="flex-1 relative z-10 flex flex-col min-h-0 overflow-hidden">
           {!scanResult && !scanning && activeTab !== 'settings' && isInitializing && (
             <div className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-white/10 rounded-2xl bg-black/20 backdrop-blur-sm p-8 animate-pulse">
               <div className="w-24 h-24 mb-6 rounded-full bg-white/5" />
