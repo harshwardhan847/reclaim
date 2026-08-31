@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
-import { Trash2, Plus, ShieldCheck, Folder } from 'lucide-react'
+import { Trash2, Plus, ShieldCheck, Folder, RefreshCw, Download, CheckCircle2, Loader2 } from 'lucide-react'
+import { useAppUpdater } from '@/lib/useAppUpdater'
 
 export function SettingsView() {
   const [exclusions, setExclusions] = useState<string[]>([])
   const [newPath, setNewPath] = useState('')
+  const [currentVersion, setCurrentVersion] = useState<string>('')
+  const { status, availableVersion, progress, error, checkForUpdate, installUpdate, getCurrentVersion } = useAppUpdater()
 
   useEffect(() => {
     const saved = localStorage.getItem('reclaim_exclusions')
@@ -16,6 +19,10 @@ export function SettingsView() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    getCurrentVersion().then(setCurrentVersion).catch(console.error)
+  }, [getCurrentVersion])
 
   const saveExclusions = (paths: string[]) => {
     setExclusions(paths)
@@ -58,6 +65,43 @@ export function SettingsView() {
       
       <div className="flex-1 overflow-auto p-8">
         <div className="max-w-2xl">
+          <h3 className="text-lg font-semibold text-white mb-2">Software Update</h3>
+          <div className="flex items-center justify-between p-4 bg-white/5 border border-white/5 rounded-xl mb-6">
+            <div>
+              <p className="text-white font-medium">Reclaim {currentVersion && `v${currentVersion}`}</p>
+              <p className="text-xs text-neutral-500 mt-1">
+                {status === 'idle' && 'Check for the latest version'}
+                {status === 'checking' && 'Checking for updates...'}
+                {status === 'up-to-date' && "You're on the latest version"}
+                {status === 'available' && `Update available: v${availableVersion}`}
+                {status === 'downloading' && `Downloading update... ${progress}%`}
+                {status === 'installing' && 'Installing, restarting...'}
+                {status === 'error' && `Update check failed: ${error}`}
+              </p>
+            </div>
+            {status === 'available' ? (
+              <Button onClick={installUpdate} className="bg-primary hover:bg-primary/90 text-white rounded-xl gap-2">
+                <Download size={16} /> Update & Restart
+              </Button>
+            ) : (
+              <Button
+                onClick={checkForUpdate}
+                disabled={status === 'checking' || status === 'downloading' || status === 'installing'}
+                variant="outline"
+                className="bg-transparent border-white/10 hover:bg-white/5 text-white rounded-xl gap-2"
+              >
+                {status === 'checking' || status === 'downloading' || status === 'installing' ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : status === 'up-to-date' ? (
+                  <CheckCircle2 size={16} className="text-green-500" />
+                ) : (
+                  <RefreshCw size={16} />
+                )}
+                Check for Updates
+              </Button>
+            )}
+          </div>
+
           <h3 className="text-lg font-semibold text-white mb-2">Hardcoded Safety Rules</h3>
           <p className="text-neutral-400 mb-6 text-sm">
             Reclaim engine automatically blocks the deletion of critical macOS paths, including <code className="bg-white/10 px-1 py-0.5 rounded text-white text-xs">/System</code>, <code className="bg-white/10 px-1 py-0.5 rounded text-white text-xs">/Library</code>, and <code className="bg-white/10 px-1 py-0.5 rounded text-white text-xs">/Applications</code>.

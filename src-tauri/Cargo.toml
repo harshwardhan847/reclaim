@@ -6,7 +6,7 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.71"
+rust-version = "1.77"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -30,6 +30,8 @@ dirs = "6.0.0"
 xxhash-rust = { version = "0.8.18", features = ["xxh3"] }
 tauri-plugin-dialog = "2.0.0-rc"
 rayon = "1.10"
+tauri-plugin-updater = "2.0.0-beta.0"
+tauri-plugin-process = "2.0.0-beta.0"
 
 [profile.release]
 lto = true

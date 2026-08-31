@@ -14,6 +14,7 @@ import { FdaModal } from '@/components/FdaModal'
 import { DevCleanupView } from '@/components/DevCleanupView'
 import { SystemInfoView } from '@/components/SystemInfoView'
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
+import { UpdateBanner } from '@/components/UpdateBanner'
 import { Trash2, AlertCircle, X, HardDrive, AppWindow, Search, RefreshCw } from 'lucide-react'
 
 interface ScanSummary {
@@ -230,6 +231,7 @@ function App() {
   return (
     <>
       <FdaModal />
+      <UpdateBanner />
       <Layout
         activeTab={activeTab}
         onTabChange={(tab) => {
