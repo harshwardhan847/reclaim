@@ -1,15 +1,7 @@
 import React from 'react';
 import { type ScanNode } from './TreemapViewer'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { FileIcon, FolderIcon, CheckCircle2, Trash2 } from 'lucide-react'
-import { useState, useMemo } from 'react'
+import { CheckCircle2, Trash2 } from 'lucide-react'
+import { useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 
 interface SmartCleanViewProps {
@@ -18,11 +10,11 @@ interface SmartCleanViewProps {
   items: ScanNode[]
   onDelete: (items: { path: string; size: number }[]) => void
   icon: React.ReactNode
+  isPro?: boolean
+  onUpgrade?: () => void
 }
 
-function SmartCleanView({ title, description, items, onDelete, icon }: SmartCleanViewProps) {
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-
+function SmartCleanView({ title, description, items, onDelete, icon, isPro, onUpgrade }: SmartCleanViewProps) {
   // Format bytes to a readable string
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 B'
@@ -32,34 +24,13 @@ function SmartCleanView({ title, description, items, onDelete, icon }: SmartClea
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
 
-  const toggleSelect = (id: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation()
-    const newSelected = new Set(selected)
-    if (newSelected.has(id)) newSelected.delete(id)
-    else newSelected.add(id)
-    setSelected(newSelected)
-  }
-
-  const toggleAll = () => {
-    if (selected.size === items.length) {
-      setSelected(new Set())
-    } else {
-      setSelected(new Set(items.map(i => i.path)))
-    }
-  }
-
   const handleDelete = () => {
-    if (selected.size === 0) return
-    const toDelete = items.filter(i => selected.has(i.path)).map(i => ({ path: i.path, size: i.size }))
+    if (items.length === 0) return
+    const toDelete = items.map(i => ({ path: i.path, size: i.size }))
     onDelete(toDelete)
-    setSelected(new Set())
   }
 
-  const selectedSize = useMemo(() => {
-    return items
-      .filter(i => selected.has(i.path))
-      .reduce((acc, curr) => acc + curr.size, 0)
-  }, [selected, items])
+  const recoverableSize = useMemo(() => items.reduce((acc, item) => acc + item.size, 0), [items])
 
   return (
     <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full">
@@ -77,79 +48,39 @@ function SmartCleanView({ title, description, items, onDelete, icon }: SmartClea
         
         <div className="text-right">
           <div className="text-3xl font-extrabold text-white">
-            {items.length} <span className="text-lg text-neutral-500 font-medium">items found</span>
+            {formatSize(recoverableSize)} <span className="text-lg text-neutral-500 font-medium">recoverable</span>
           </div>
         </div>
       </div>
       
       {/* Toolbar */}
       <div className="px-6 py-3 bg-black/40 flex items-center justify-between border-b border-white/5">
-        <button 
-          onClick={toggleAll}
-          className="flex items-center space-x-2 text-sm text-neutral-300 hover:text-white transition-colors"
-        >
-          <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${selected.size === items.length && items.length > 0 ? 'bg-primary border-primary' : 'border-white/20'}`}>
-            {selected.size === items.length && items.length > 0 && <CheckCircle2 size={14} className="text-white" />}
-          </div>
-          <span>Select All</span>
-        </button>
+        <div className="flex items-center space-x-2 text-sm text-neutral-400">
+          <span>{items.length} cleanup candidates {isPro ? 'ready to clean' : '· unlock Pro to inspect exact sizes and clean'}</span>
+        </div>
 
         <Button 
-          onClick={handleDelete}
-          disabled={selected.size === 0}
+          onClick={isPro ? handleDelete : onUpgrade}
+          disabled={items.length === 0}
           className="bg-red-600 hover:bg-red-700 text-white font-bold shadow-lg shadow-red-900/20 disabled:opacity-50 transition-all duration-200"
         >
           <Trash2 size={16} className="mr-2" />
-          Delete Selected ({formatSize(selectedSize)})
+          {isPro ? `Clean Recoverable Space (${formatSize(recoverableSize)})` : 'Buy License to Clean'}
         </Button>
       </div>
       
-      {/* File List */}
-      <div className="overflow-auto flex-1 p-2">
-        <Table>
-          <TableHeader>
-            <TableRow className="border-white/5 hover:bg-transparent">
-              <TableHead className="w-12"></TableHead>
-              <TableHead className="text-muted-foreground font-medium">Name</TableHead>
-              <TableHead className="text-muted-foreground font-medium">Type</TableHead>
-              <TableHead className="text-right text-muted-foreground font-medium">Size</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.slice(0, 300).map((file) => (
-              <TableRow 
-                key={file.path}
-                className="group border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none"
-                onClick={(e) => toggleSelect(file.path, e)}
-              >
-                <TableCell className="w-12 text-center">
-                  <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${selected.has(file.path) ? 'bg-primary border-primary' : 'border-white/20 group-hover:border-white/40'}`}>
-                    {selected.has(file.path) && <CheckCircle2 size={14} className="text-white" />}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 rounded-lg bg-black/40 text-primary group-hover:scale-110 transition-transform">
-                      {file.isDir ? <FolderIcon size={18} /> : <FileIcon size={18} />}
-                    </div>
-                    <div>
-                      <p className="font-medium text-white truncate max-w-sm" title={file.name}>{file.name}</p>
-                      <p className="text-xs text-neutral-500 truncate max-w-sm" title={file.path}>{file.path}</p>
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="text-neutral-400">
-                  <span className="px-2 py-1 rounded-md bg-white/5 text-xs border border-white/5">
-                    {file.isDir ? 'Directory' : 'File'}
-                  </span>
-                </TableCell>
-                <TableCell className="text-right font-medium text-white text-lg">
-                  {formatSize(file.size)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      <div className="flex-1 p-6">
+        <div className="rounded-2xl border border-white/10 bg-black/20 p-8 text-center">
+          <div className="mx-auto mb-4 w-16 h-16 rounded-full bg-primary/15 flex items-center justify-center text-primary">{icon}</div>
+          <p className="text-4xl font-extrabold text-white">{formatSize(recoverableSize)}</p>
+          <p className="text-neutral-400 mt-2">could be recovered from {items.length} matching items</p>
+          <p className="text-xs text-neutral-600 mt-4">{isPro ? 'Review the candidates, then clean them safely to Trash.' : 'Names are visible; individual sizes and cleanup are unlocked with Pro.'}</p>
+          {items.length > 0 && (
+            <div className="mx-auto mt-6 max-w-lg space-y-2 text-left">
+              {items.slice(0, 4).map(item => <div key={item.path} className="flex items-center gap-3 rounded-xl border border-white/5 bg-white/[.03] px-4 py-3"><div className="h-3 w-3 rounded-full bg-primary/40" /><span className="flex-1 truncate text-sm text-neutral-200">{item.name}</span><span className={`w-16 text-right text-xs text-neutral-400 ${isPro ? '' : 'blur-sm select-none'}`}>{formatSize(item.size)}</span>{!isPro && <span className="text-[10px] text-amber-400">PRO</span>}</div>)}
+            </div>
+          )}
+        </div>
         
         {items.length === 0 && (
           <div className="flex flex-col items-center justify-center h-48 text-neutral-500">

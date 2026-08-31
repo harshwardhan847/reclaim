@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Trash2, Plus, ShieldCheck, Folder, RefreshCw, Download, CheckCircle2, Loader2 } from 'lucide-react'
 import { useAppUpdater } from '@/lib/useAppUpdater'
+import { LicenseView, type LicenseState } from './LicenseView'
 
-export function SettingsView() {
+export function SettingsView({ onLicenseChange }: { onLicenseChange?: (state: LicenseState) => void }) {
   const [exclusions, setExclusions] = useState<string[]>([])
   const [newPath, setNewPath] = useState('')
   const [currentVersion, setCurrentVersion] = useState<string>('')
@@ -65,6 +66,7 @@ export function SettingsView() {
       
       <div className="flex-1 overflow-auto p-8">
         <div className="max-w-2xl">
+          <LicenseView onChange={onLicenseChange} />
           <h3 className="text-lg font-semibold text-white mb-2">Software Update</h3>
           <div className="flex items-center justify-between p-4 bg-white/5 border border-white/5 rounded-xl mb-6">
             <div>

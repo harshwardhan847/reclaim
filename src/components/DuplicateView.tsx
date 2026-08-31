@@ -10,6 +10,8 @@ interface DuplicateViewProps {
   scanResult: ScanNode | null
   onDelete: (items: { path: string; size: number }[]) => void
   onWastedSizeChange?: (size: number) => void
+  isPro?: boolean
+  onUpgrade?: () => void
 }
 
 interface DuplicateGroupResult {
@@ -19,7 +21,7 @@ interface DuplicateGroupResult {
 
 const MIN_DUPLICATE_SIZE = 1024 * 1024 // ignore files under 1MB
 
-function DuplicateView({ scanResult, onDelete, onWastedSizeChange }: DuplicateViewProps) {
+function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgrade }: DuplicateViewProps) {
   const [loading, setLoading] = useState(false)
   const [hasRun, setHasRun] = useState(false)
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroupResult[]>([])
@@ -188,23 +190,23 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange }: DuplicateVi
           </Button>
 
           <Button
-            onClick={runDuplicateScan}
+            onClick={isPro ? runDuplicateScan : onUpgrade}
             disabled={loading}
             variant="outline"
             className="bg-transparent border-white/10 hover:bg-white/5 text-white"
           >
             <RefreshCw size={16} className={`mr-2 text-neutral-400 ${loading ? 'animate-spin' : ''}`} />
-            Re-check
+            {isPro ? 'Re-check' : 'Scan Duplicates · PRO'}
           </Button>
         </div>
 
         <Button
-          onClick={handleDelete}
-          disabled={selectedPaths.size === 0}
+          onClick={isPro ? handleDelete : onUpgrade}
+          disabled={isPro && selectedPaths.size === 0}
           className="bg-red-600 hover:bg-red-700 text-white font-bold shadow-lg shadow-red-900/20 disabled:opacity-50 transition-all duration-200"
         >
           <Trash2 size={16} className="mr-2" />
-          Delete Selected ({formatSize(selectedSize)})
+          {isPro ? `Delete Selected (${formatSize(selectedSize)})` : 'Buy License to Clean'}
         </Button>
       </div>
 
@@ -213,8 +215,8 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange }: DuplicateVi
           <div className="flex flex-col items-center justify-center h-48">
             <Copy size={40} className="text-neutral-600 mb-4" />
             <p className="text-white font-medium mb-4">Find Exact Duplicate Files</p>
-            <Button onClick={runDuplicateScan} className="bg-primary hover:bg-primary/90 text-white">
-              Scan for Duplicates
+            <Button onClick={isPro ? runDuplicateScan : onUpgrade} className="bg-primary hover:bg-primary/90 text-white">
+              {isPro ? 'Scan for Duplicates' : 'Unlock Duplicate Scan'}
             </Button>
           </div>
         )}
@@ -239,7 +241,7 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange }: DuplicateVi
             <TableHeader>
               <TableRow className="border-white/5 hover:bg-transparent">
                 <TableHead className="w-12"></TableHead>
-                <TableHead className="text-muted-foreground font-medium">Path</TableHead>
+                <TableHead className="text-muted-foreground font-medium">Duplicate group</TableHead>
                 <TableHead className="text-right text-muted-foreground font-medium w-32">Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -262,8 +264,8 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange }: DuplicateVi
                           <FileIcon size={18} />
                         </div>
                         <div className="truncate">
-                          <p className="font-medium text-white truncate" title={path.split('/').pop()}>{path.split('/').pop()}</p>
-                          <p className="text-xs text-neutral-500 truncate" title={path}>{path}</p>
+                          <p className="font-medium text-white truncate blur-sm select-none">Hidden file</p>
+                          <p className="text-xs text-neutral-600 truncate">File identity hidden for privacy</p>
                         </div>
                       </div>
                     </TableCell>

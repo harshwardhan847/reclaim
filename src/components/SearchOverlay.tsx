@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Search, File as FileIcon, Folder as FolderIcon, X, Trash2 } from 'lucide-react'
+import { Search, File as FileIcon, Folder as FolderIcon, X } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { type ScanNode } from './TreemapViewer'
 
@@ -7,10 +7,10 @@ interface SearchOverlayProps {
   data: ScanNode | null
   isOpen: boolean
   onClose: () => void
-  onDelete: (node: ScanNode) => void
+  onDelete?: (node: ScanNode) => void
 }
 
-export function SearchOverlay({ data, isOpen, onClose, onDelete }: SearchOverlayProps) {
+export function SearchOverlay({ data, isOpen, onClose }: SearchOverlayProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ScanNode[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
@@ -117,23 +117,13 @@ export function SearchOverlay({ data, isOpen, onClose, onDelete }: SearchOverlay
                     {node.isDir ? <FolderIcon size={18} /> : <FileIcon size={18} />}
                   </div>
                   <div className="truncate min-w-0">
-                    <p className="text-white font-medium truncate">{node.name}</p>
-                    <p className="text-xs text-neutral-500 truncate" title={node.path}>{node.path}</p>
+                    <p className="text-white font-medium truncate blur-sm select-none">Hidden item</p>
+                    <p className="text-xs text-neutral-600 truncate">File identity hidden for privacy</p>
                   </div>
                 </div>
                 
                 <div className="flex items-center space-x-4 shrink-0 pl-4">
                   <span className="text-neutral-400 font-medium text-sm">{formatSize(node.size)}</span>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDelete(node)
-                    }}
-                    className="p-2 text-neutral-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                    title="Move to Trash"
-                  >
-                    <Trash2 size={16} />
-                  </button>
                 </div>
               </div>
             ))}

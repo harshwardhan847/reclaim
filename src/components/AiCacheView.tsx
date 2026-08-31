@@ -7,13 +7,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { FileIcon, FolderIcon, CheckCircle2, Trash2, ChevronDown, ChevronRight, Bot } from 'lucide-react'
+import { FolderIcon, CheckCircle2, Trash2, ChevronDown, ChevronRight, Bot } from 'lucide-react'
 import React, { useState, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 
 interface AiCacheViewProps {
   items: ScanNode[]
   onDelete: (items: { path: string; size: number }[]) => void
+  isPro?: boolean
+  onUpgrade?: () => void
 }
 
 type AgentGroup = {
@@ -22,7 +24,7 @@ type AgentGroup = {
   totalSize: number
 }
 
-function AiCacheView({ items, onDelete }: AiCacheViewProps) {
+function AiCacheView({ items, onDelete, isPro, onUpgrade }: AiCacheViewProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
@@ -81,13 +83,7 @@ function AiCacheView({ items, onDelete }: AiCacheViewProps) {
     return result.sort((a, b) => b.totalSize - a.totalSize)
   }, [items])
 
-  const toggleSelectFile = (id: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation()
-    const newSelected = new Set(selected)
-    if (newSelected.has(id)) newSelected.delete(id)
-    else newSelected.add(id)
-    setSelected(newSelected)
-  }
+  const totalRecoverable = useMemo(() => items.reduce((sum, item) => sum + item.size, 0), [items])
 
   const toggleSelectGroup = (group: AgentGroup, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
@@ -150,7 +146,7 @@ function AiCacheView({ items, onDelete }: AiCacheViewProps) {
         
         <div className="text-right">
           <div className="text-3xl font-extrabold text-white">
-            {groups.length} <span className="text-lg text-neutral-500 font-medium">agents</span>
+            {formatSize(totalRecoverable)} <span className="text-lg text-neutral-500 font-medium">recoverable</span>
           </div>
         </div>
       </div>
@@ -158,22 +154,22 @@ function AiCacheView({ items, onDelete }: AiCacheViewProps) {
       {/* Toolbar */}
       <div className="px-6 py-3 bg-black/40 flex items-center justify-between border-b border-white/5">
         <button 
-          onClick={toggleAll}
+          onClick={isPro ? toggleAll : onUpgrade}
           className="flex items-center space-x-2 text-sm text-neutral-300 hover:text-white transition-colors"
         >
           <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${selected.size === items.length && items.length > 0 ? 'bg-primary border-primary' : 'border-white/20'}`}>
             {selected.size === items.length && items.length > 0 && <CheckCircle2 size={14} className="text-white" />}
           </div>
-          <span>Select All</span>
+          <span>{isPro ? 'Select All' : 'Inspect cleanup · PRO'}</span>
         </button>
 
         <Button 
-          onClick={handleDelete}
-          disabled={selected.size === 0}
+          onClick={isPro ? handleDelete : onUpgrade}
+          disabled={isPro && selected.size === 0}
           className="bg-red-600 hover:bg-red-700 text-white font-bold shadow-lg shadow-red-900/20 disabled:opacity-50 transition-all duration-200"
         >
           <Trash2 size={16} className="mr-2" />
-          Delete Selected ({formatSize(selectedSize)})
+          {isPro ? `Delete Selected (${formatSize(selectedSize)})` : 'Buy License to Clean'}
         </Button>
       </div>
       
@@ -192,7 +188,7 @@ function AiCacheView({ items, onDelete }: AiCacheViewProps) {
               <TableRow className="border-white/5 hover:bg-transparent">
                 <TableHead className="w-12"></TableHead>
                 <TableHead className="w-8"></TableHead>
-                <TableHead className="text-muted-foreground font-medium">Name</TableHead>
+                <TableHead className="text-muted-foreground font-medium">Tool category</TableHead>
                 <TableHead className="text-muted-foreground font-medium">Type</TableHead>
                 <TableHead className="text-right text-muted-foreground font-medium">Size</TableHead>
               </TableRow>
@@ -208,15 +204,15 @@ function AiCacheView({ items, onDelete }: AiCacheViewProps) {
                     {/* Folder Group Row */}
                     <TableRow 
                       className="group/row border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none bg-black/20"
-                      onClick={(e) => toggleExpand(group.name, e)}
+                      onClick={(e) => isPro ? toggleExpand(group.name, e) : onUpgrade?.()}
                     >
-                      <TableCell className="w-12 text-center" onClick={(e) => toggleSelectGroup(group, e)}>
+                      <TableCell className="w-12 text-center" onClick={(e) => isPro ? toggleSelectGroup(group, e) : onUpgrade?.()}>
                         <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${allSelected ? 'bg-primary border-primary' : someSelected ? 'bg-primary/50 border-primary' : 'border-white/20 group-hover/row:border-white/40'}`}>
-                          {(allSelected || someSelected) && <CheckCircle2 size={14} className="text-white" />}
+                          {isPro && (allSelected || someSelected) && <CheckCircle2 size={14} className="text-white" />}
                         </div>
                       </TableCell>
                       <TableCell className="w-8 text-neutral-500">
-                        {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                        {isPro ? (isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />) : '🔒'}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center space-x-3">
@@ -235,45 +231,11 @@ function AiCacheView({ items, onDelete }: AiCacheViewProps) {
                         </span>
                       </TableCell>
                       <TableCell className="text-right font-bold text-white text-lg">
-                        {formatSize(group.totalSize)}
+                        <span className={!isPro ? 'blur-sm select-none' : ''}>{formatSize(group.totalSize)}</span>
                       </TableCell>
                     </TableRow>
 
                     {/* Children Rows */}
-                    {isExpanded && group.items.slice(0, 200).map((file, idx) => (
-                      <TableRow 
-                        key={file.path}
-                        className={`group border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none bg-black/40 ${idx === Math.min(group.items.length, 200) - 1 ? 'border-b-[1px]' : 'border-b-0'}`}
-                        onClick={(e) => toggleSelectFile(file.path, e)}
-                      >
-                        <TableCell className="w-12 text-center relative">
-                          <div className="absolute left-6 top-0 w-[1px] h-full bg-white/10" />
-                          <div className="absolute left-6 top-1/2 w-4 h-[1px] bg-white/10" />
-                        </TableCell>
-                        <TableCell className="w-12 text-center" onClick={(e) => toggleSelectFile(file.path, e)}>
-                          <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${selected.has(file.path) ? 'bg-primary border-primary' : 'border-white/20 group-hover:border-white/40'}`}>
-                            {selected.has(file.path) && <CheckCircle2 size={14} className="text-white" />}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center space-x-3">
-                            <div className="p-1.5 rounded-lg text-neutral-500">
-                              <FileIcon size={16} />
-                            </div>
-                            <div>
-                              <p className="font-medium text-neutral-300 truncate max-w-md text-sm" title={file.name}>{file.name}</p>
-                              <p className="text-[10px] text-neutral-600 truncate max-w-md" title={file.path}>{file.path}</p>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-neutral-500 text-xs">
-                          File
-                        </TableCell>
-                        <TableCell className="text-right font-medium text-neutral-300 text-sm">
-                          {formatSize(file.size)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
                   </React.Fragment>
                 )
               })}

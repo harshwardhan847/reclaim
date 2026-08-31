@@ -8,17 +8,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { FileIcon, FolderIcon, HardDriveIcon, CheckCircle2, ChevronRight, CornerUpLeft, Loader2 } from 'lucide-react'
+import { FileIcon, FolderIcon, HardDriveIcon, ChevronRight, CornerUpLeft, Loader2, LockKeyhole } from 'lucide-react'
 import { useState, useMemo, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 
-function FileListView({ data }: { data?: ScanNode | null }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+function FileListView({ data, isPro = false, onUpgrade }: { data?: ScanNode | null; isPro?: boolean; onUpgrade?: () => void }) {
   const [history, setHistory] = useState<ScanNode[]>([])
   // Directories beyond the scan's summary depth/breadth cap arrive with no
   // `children` even though they're real directories -- fetched on demand as
   // the user navigates into them, instead of shipping the whole disk tree.
   const [childrenCache, setChildrenCache] = useState<Record<string, ScanNode[]>>({})
+  const [contextNode, setContextNode] = useState<ScanNode | null>(null)
 
   // Current folder is the last item in history, or root data
   const currentFolder = history.length > 0 ? history[history.length - 1] : data
@@ -67,16 +67,15 @@ function FileListView({ data }: { data?: ScanNode | null }) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
 
-  const toggleSelect = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const newSelected = new Set(selected)
-    if (newSelected.has(id)) newSelected.delete(id)
-    else newSelected.add(id)
-    setSelected(newSelected)
+  const reveal = async () => {
+    if (!contextNode) return
+    if (!isPro) { onUpgrade?.(); setContextNode(null); return }
+    await invoke('reveal_in_finder', { path: contextNode.path }).catch(console.error)
+    setContextNode(null)
   }
 
   return (
-    <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full max-h-[600px]">
+    <div className="relative glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full max-h-[600px]">
       
       {/* Breadcrumb Navigation */}
       <div className="p-3 border-b border-white/5 flex items-center bg-black/20 overflow-x-auto custom-scrollbar space-x-2">
@@ -123,7 +122,6 @@ function FileListView({ data }: { data?: ScanNode | null }) {
         <Table>
           <TableHeader>
             <TableRow className="border-white/5 hover:bg-transparent">
-              <TableHead className="w-12"></TableHead>
               <TableHead className="text-muted-foreground font-medium">Name</TableHead>
               <TableHead className="text-muted-foreground font-medium">Type</TableHead>
               <TableHead className="text-right text-muted-foreground font-medium">Size</TableHead>
@@ -134,14 +132,9 @@ function FileListView({ data }: { data?: ScanNode | null }) {
               <TableRow 
                 key={file.path}
                 className="group border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none"
-                onClick={(e) => toggleSelect(file.path, e)}
                 onDoubleClick={() => handleDoubleClick(file)}
+                onContextMenu={(e) => { e.preventDefault(); setContextNode(file) }}
               >
-                <TableCell className="w-12 text-center">
-                  <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${selected.has(file.path) ? 'bg-primary border-primary' : 'border-white/20 group-hover:border-white/40'}`}>
-                    {selected.has(file.path) && <CheckCircle2 size={14} className="text-white" />}
-                  </div>
-                </TableCell>
                 <TableCell>
                   <div className="flex items-center space-x-3">
                     <div className="p-2 rounded-lg bg-black/40 text-primary group-hover:scale-110 transition-transform">
@@ -149,7 +142,7 @@ function FileListView({ data }: { data?: ScanNode | null }) {
                     </div>
                     <div>
                       <p className="font-medium text-white truncate max-w-[200px] sm:max-w-xs">{file.name}</p>
-                      <p className="text-xs text-neutral-500 truncate max-w-[200px] sm:max-w-xs">{file.path}</p>
+                      <p className="text-xs text-neutral-600">Right-click for options</p>
                     </div>
                   </div>
                 </TableCell>
@@ -179,6 +172,12 @@ function FileListView({ data }: { data?: ScanNode | null }) {
           </div>
         )}
       </div>
+      {contextNode && <div className="absolute inset-0 z-30" onClick={() => setContextNode(null)} onContextMenu={e => { e.preventDefault(); setContextNode(null) }}>
+        <div className="absolute right-6 top-24 w-52 rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl" onClick={e => e.stopPropagation()}>
+          <p className="px-3 py-2 text-xs font-semibold text-neutral-400 truncate">{contextNode.name}</p>
+          <button onClick={reveal} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white hover:bg-white/10"><LockKeyhole size={15} className={!isPro ? 'text-amber-400' : 'text-emerald-400'} />{isPro ? 'Reveal in Finder' : 'Reveal in Finder · PRO'}</button>
+        </div>
+      </div>}
     </div>
   )
 }

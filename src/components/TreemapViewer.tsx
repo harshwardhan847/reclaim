@@ -15,10 +15,14 @@ export interface ScanNode {
 
 function TreemapViewer({ 
   data, 
-  onStageItem 
+  onStageItem,
+  isPro = false,
+  onUpgrade,
 }: { 
   data: ScanNode | null,
-  onStageItem?: (node: ScanNode) => void 
+  onStageItem?: (node: ScanNode) => void,
+  isPro?: boolean,
+  onUpgrade?: () => void,
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -375,6 +379,7 @@ function TreemapViewer({
                 className="w-full text-left px-4 py-2 hover:bg-primary/20 hover:text-white transition-colors"
                 onClick={async () => {
                   setContextMenu(null);
+                  if (!isPro) { onUpgrade?.(); return }
                   const { invoke } = await import('@tauri-apps/api/core');
                   try {
                     await invoke('reveal_in_finder', { path: contextMenu.node.path });
@@ -383,33 +388,10 @@ function TreemapViewer({
                   }
                 }}
               >
-                Reveal in Finder
+                {isPro ? 'Reveal in Finder' : 'Reveal in Finder · PRO 🔒'}
               </button>
-              <button 
-                className="w-full text-left px-4 py-2 hover:bg-white/10 text-white transition-colors"
-                onClick={() => {
-                  setContextMenu(null);
-                  if (onStageItem) onStageItem(contextMenu.node);
-                }}
-              >
-                Add to Trash Cart
-              </button>
-              <div className="h-px bg-white/5 my-1 mx-2" />
-              <button 
-                className="w-full text-left px-4 py-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 transition-colors"
-
-                onClick={async () => {
-                  setContextMenu(null);
-                  const { invoke } = await import('@tauri-apps/api/core');
-                  try {
-                    await invoke('move_to_trash', { paths: [contextMenu.node.path] });
-                  } catch (err) {
-                    alert(`Error deleting: ${err}`);
-                  }
-                }}
-              >
-                Move to Trash
-              </button>
+              <button className="w-full text-left px-4 py-2 hover:bg-primary/20 hover:text-white transition-colors" onClick={() => { const node = contextMenu.node; setContextMenu(null); if (!isPro) { onUpgrade?.(); return } onStageItem?.(node) }}>{isPro ? 'Add to Cleanup List' : 'Add to Cleanup List · PRO 🔒'}</button>
+              <button className="w-full text-left px-4 py-2 text-red-300 hover:bg-red-500/20" onClick={async () => { const node = contextMenu.node; setContextMenu(null); if (!isPro) { onUpgrade?.(); return } const { invoke } = await import('@tauri-apps/api/core'); await invoke('move_to_trash', { paths: [node.path] }).catch(err => alert(String(err))) }}>{isPro ? 'Move to Trash' : 'Move to Trash · PRO 🔒'}</button>
             </div>
           </div>
         )}

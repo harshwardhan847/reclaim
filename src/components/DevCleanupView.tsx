@@ -13,6 +13,8 @@ type DevDirectory = {
 
 interface DevCleanupViewProps {
   onDelete: (items: { path: string; size: number }[]) => void;
+  isPro?: boolean;
+  onUpgrade?: () => void;
 }
 
 const formatBytes = (bytes: number) => {
@@ -32,7 +34,7 @@ const getCategoryIcon = (category: string) => {
   return <Folder className="w-5 h-5" />;
 };
 
-function DevCleanupView({ onDelete }: DevCleanupViewProps) {
+function DevCleanupView({ onDelete, isPro, onUpgrade }: DevCleanupViewProps) {
   const [directories, setDirectories] = useState<DevDirectory[]>([]);
   const [loading, setLoading] = useState(false);
   const [scanned, setScanned] = useState(false);
@@ -101,6 +103,8 @@ function DevCleanupView({ onDelete }: DevCleanupViewProps) {
       .reduce((sum, d) => sum + d.size, 0);
   }, [directories, selectedPaths]);
 
+  const totalRecoverableSize = useMemo(() => directories.reduce((sum, dir) => sum + dir.size, 0), [directories]);
+
   const handleDelete = () => {
     const toDelete = directories.filter(d => selectedPaths.has(d.path)).map(d => ({ path: d.path, size: d.size }));
     onDelete(toDelete);
@@ -125,26 +129,27 @@ function DevCleanupView({ onDelete }: DevCleanupViewProps) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between glass p-4 rounded-lg border border-white/10">
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={selectAll} className="border-white/20 text-white hover:bg-white/10">
-            {selectedPaths.size === directories.length && directories.length > 0 ? "Deselect All" : "Select All"}
+          <Button variant="outline" size="sm" onClick={isPro ? selectAll : onUpgrade} className="border-white/20 text-white hover:bg-white/10">
+            {isPro ? (selectedPaths.size === directories.length && directories.length > 0 ? "Deselect All" : "Select All") : 'Select cleanup · PRO'}
           </Button>
           <Button variant="outline" size="sm" onClick={handleScan} disabled={loading} className="border-white/20 text-white hover:bg-white/10 gap-2">
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Rescan
           </Button>
         </div>
+        <div className="text-right mr-4"><p className="text-lg font-bold text-white">{formatBytes(totalRecoverableSize)}</p><p className="text-xs text-white/45">recoverable</p></div>
         <Button 
           variant="destructive" 
           size="sm" 
-          onClick={handleDelete}
-          disabled={selectedPaths.size === 0}
+          onClick={isPro ? handleDelete : onUpgrade}
+          disabled={isPro && selectedPaths.size === 0}
           className="gap-2 bg-red-600 hover:bg-red-700 text-white"
         >
           <Trash2 className="w-4 h-4" />
-          Clean Selected ({formatBytes(totalSelectedSize)})
+          {isPro ? `Clean Selected (${formatBytes(totalSelectedSize)})` : 'Buy License to Clean'}
         </Button>
       </div>
 
@@ -173,13 +178,13 @@ function DevCleanupView({ onDelete }: DevCleanupViewProps) {
                     ref={input => {
                       if (input) input.indeterminate = !allSelected && someSelected;
                     }}
-                    onChange={() => toggleSelectCategory(dirs)}
+                    onChange={() => isPro ? toggleSelectCategory(dirs) : onUpgrade?.()}
                     className="mr-4 w-4 h-4 rounded bg-black/50 border-white/20"
                   />
                   <div className="flex items-center gap-3 flex-1 text-white cursor-pointer" onClick={() => toggleCategory(category)}>
                     {getCategoryIcon(category)}
                     <span className="font-semibold">{category}</span>
-                    <span className="text-white/50 text-sm ml-auto">{dirs.length} items • {formatBytes(categorySize)}</span>
+                    <span className="text-white/50 text-sm ml-auto">{dirs.length} items • <span className={!isPro ? 'blur-sm select-none' : ''}>{formatBytes(categorySize)}</span></span>
                   </div>
                 </div>
                 
@@ -190,14 +195,14 @@ function DevCleanupView({ onDelete }: DevCleanupViewProps) {
                         <input 
                           type="checkbox"
                           checked={selectedPaths.has(dir.path)}
-                          onChange={() => toggleSelectPath(dir.path)}
+                          onChange={() => isPro ? toggleSelectPath(dir.path) : onUpgrade?.()}
                           className="w-4 h-4 rounded bg-black/50 border-white/20 ml-8"
                         />
                         <div className="flex-1 min-w-0">
                           <p className="text-white text-sm truncate">{dir.name}</p>
-                          <p className="text-white/40 text-xs truncate">{dir.path}</p>
+                          <p className="text-white/40 text-xs">Path available with Pro</p>
                         </div>
-                        <span className="text-white/60 text-sm whitespace-nowrap">{formatBytes(dir.size)}</span>
+                        <span className={`text-white/60 text-sm whitespace-nowrap ${!isPro ? 'blur-sm select-none' : ''}`}>{formatBytes(dir.size)}</span>
                       </div>
                     ))}
                     {dirs.length > 200 && (

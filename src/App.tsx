@@ -15,6 +15,8 @@ import { DevCleanupView } from '@/components/DevCleanupView'
 import { SystemInfoView } from '@/components/SystemInfoView'
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
 import { UpdateBanner } from '@/components/UpdateBanner'
+import { type LicenseState } from '@/components/LicenseView'
+import { UpgradeModal } from '@/components/UpgradeModal'
 import { Trash2, AlertCircle, X, HardDrive, AppWindow, Search, RefreshCw } from 'lucide-react'
 
 interface ScanSummary {
@@ -39,6 +41,8 @@ function App() {
   const [isInitializing, setIsInitializing] = useState(true)
   const [isDeleting, setIsDeleting] = useState(false)
   const [scanTarget, setScanTarget] = useState<string>('/Users/harshwardhan')
+  const [license, setLicense] = useState<LicenseState | null>(null)
+  const [upgradeBenefit, setUpgradeBenefit] = useState<string | null>(null)
 
   // Badges we get for free from the scan itself (no tab needs to be opened
   // for these to be accurate).
@@ -54,6 +58,7 @@ function App() {
 
   // Listen for Cmd+K globally
   useEffect(() => {
+    invoke<LicenseState>('get_license_state').then(setLicense).catch(console.error)
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
@@ -184,6 +189,7 @@ function App() {
   }
 
   const handleConfirmDelete = async () => {
+    if (!license?.canUsePaidFeatures) { alert('Activate your Reclaim license to clean files.'); return }
     const paths = stagedDeletes.map(n => n.path)
     try {
       await invoke('move_to_trash', { paths })
@@ -197,9 +203,10 @@ function App() {
   }
 
   const handleSmartDelete = useCallback((items: { path: string; size: number }[]) => {
+    if (!license?.canUsePaidFeatures) { setUpgradeBenefit('this cleanup action'); return }
     const totalSize = items.reduce((acc, i) => acc + i.size, 0)
     setConfirmDelete({ paths: items.map(i => i.path), size: totalSize })
-  }, [])
+  }, [license?.canUsePaidFeatures])
 
   const executeDelete = async () => {
     if (!confirmDelete) return
@@ -243,6 +250,8 @@ function App() {
         tabSizes={tabSizes}
         onNewScan={handleNewScan}
         isScanning={scanning}
+        isPro={!!license?.canUsePaidFeatures}
+        onUpgrade={() => setUpgradeBenefit('all cleanup features')}
       >
         <div className="flex flex-col h-full relative">
         <header className="absolute top-0 right-8 z-50 flex items-center h-10 mt-2 space-x-3">
@@ -318,9 +327,9 @@ function App() {
               <Button
                 id="start-scan-btn"
                 className="text-lg h-14 px-8 rounded-xl bg-primary hover:bg-primary/90 text-white shadow-[0_0_20px_rgba(220,38,38,0.3)] hover:shadow-[0_0_30px_rgba(220,38,38,0.5)] transition-all duration-300 transform hover:scale-[1.02]"
-                onClick={() => handleScan()}
+                onClick={() => license?.canUsePaidFeatures ? handleNewScan('full') : handleNewScan('home')}
               >
-                Start Full Scan
+                {license?.canUsePaidFeatures ? 'Start Full Scan' : 'Start Free Home Scan'}
               </Button>
             </div>
           )}
@@ -335,7 +344,7 @@ function App() {
 
           {activeTab === 'settings' && (
             <div className="flex-1 pb-4 h-full overflow-y-auto">
-              <SettingsView />
+            <SettingsView onLicenseChange={setLicense} />
             </div>
           )}
 
@@ -351,8 +360,12 @@ function App() {
 
               {/* Treemap View */}
               <div className={`flex-1 flex flex-col min-h-0 ${activeTab === 'overview' ? 'flex' : 'hidden'}`}>
+                <div className="mx-1 mb-3 flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+                  <div><p className="text-sm font-semibold text-white">{(Object.values(tabSizes).reduce((sum, size) => sum + size, 0) / 1e9).toFixed(2)} GB can be reclaimed</p><p className="text-xs text-neutral-500">Caches, large files, leftovers and developer artifacts found in this scan.</p></div>
+                  <Button onClick={license?.canUsePaidFeatures ? () => setActiveTab('large_files') : () => setUpgradeBenefit('safe cleanup for the space you found')} className="bg-primary hover:bg-primary/90 text-white">{license?.canUsePaidFeatures ? 'Start Cleaning' : 'Upgrade to Reclaim It'}</Button>
+                </div>
                 <div className="flex-1 min-h-0">
-                  <TreemapViewer data={scanResult} onStageItem={handleStageItem} />
+                  <TreemapViewer data={scanResult} onStageItem={handleStageItem} isPro={!!license?.canUsePaidFeatures} onUpgrade={() => setUpgradeBenefit('treemap actions')} />
                 </div>
               </div>
 
@@ -362,7 +375,7 @@ function App() {
                   <h3 className="text-xl font-semibold">Disk Explorer</h3>
                 </div>
                 <div className="h-full border border-white/5 rounded-xl overflow-hidden glass">
-                   <FileListView data={scanResult} />
+                   <FileListView data={scanResult} isPro={!!license?.canUsePaidFeatures} onUpgrade={() => setUpgradeBenefit('Finder reveal and file actions')} />
                 </div>
               </div>
 
@@ -372,6 +385,8 @@ function App() {
                   <DuplicateView
                   scanResult={scanResult}
                   onDelete={handleSmartDelete}
+                  isPro={!!license?.canUsePaidFeatures}
+                  onUpgrade={() => setUpgradeBenefit('duplicate cleanup')}
                   onWastedSizeChange={setDuplicatesWastedSize}
                 />
                 </div>
@@ -385,6 +400,8 @@ function App() {
                   icon={<HardDrive size={24} />}
                   items={largeFiles ?? []}
                   onDelete={handleSmartDelete}
+                  isPro={!!license?.canUsePaidFeatures}
+                  onUpgrade={() => setUpgradeBenefit('large-file cleanup')}
                 />
                 </div>
               </div>
@@ -394,6 +411,8 @@ function App() {
                   <AiCacheView
                   items={aiCaches ?? []}
                   onDelete={handleSmartDelete}
+                  isPro={!!license?.canUsePaidFeatures}
+                  onUpgrade={() => setUpgradeBenefit('AI cache cleanup')}
                 />
                 </div>
               </div>
@@ -406,6 +425,8 @@ function App() {
                   icon={<AppWindow size={24} />}
                   items={leftoverData ?? []}
                   onDelete={handleSmartDelete}
+                  isPro={!!license?.canUsePaidFeatures}
+                  onUpgrade={() => setUpgradeBenefit('leftover cleanup')}
                 />
                 </div>
               </div>
@@ -413,7 +434,7 @@ function App() {
               {/* Dev Cleanup */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'dev_cleanup' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                  <DevCleanupView onDelete={handleSmartDelete} />
+                  <DevCleanupView onDelete={handleSmartDelete} isPro={!!license?.canUsePaidFeatures} onUpgrade={() => setUpgradeBenefit('developer cleanup')} />
                 </div>
               </div>
 </div>
@@ -421,7 +442,7 @@ function App() {
         </div>
 
         {/* Floating Radar Trash */}
-        {scanResult && !scanning && (activeTab === 'overview' || activeTab === 'list') && !isTrashOpen && (
+        {scanResult && !scanning && activeTab === 'overview' && !isTrashOpen && (
           <div
             id="radar-trash"
             className="absolute bottom-6 right-6 w-20 h-20 z-50 flex items-center justify-center cursor-pointer group"
@@ -518,6 +539,7 @@ function App() {
         totalSize={confirmDelete?.size || 0}
         isDeleting={isDeleting}
       />
+      {upgradeBenefit && <UpgradeModal benefit={upgradeBenefit} onClose={() => setUpgradeBenefit(null)} onActivated={(state) => { setLicense(state); setUpgradeBenefit(null) }} />}
     </Layout>
     </>
   )

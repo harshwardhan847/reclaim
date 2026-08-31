@@ -2,9 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
 // Bounds on the tree we actually ship over IPC. A full-disk scan can touch
@@ -16,6 +19,8 @@ const MAX_TREE_DEPTH: usize = 5;
 const MAX_CHILDREN_PER_DIR: usize = 60;
 const SUMMARY_NODE_BUDGET: i64 = 15_000;
 const LARGE_FILE_THRESHOLD: u64 = 100 * 1024 * 1024;
+const LICENSE_SERVICE: &str = "com.reclaim.app.license";
+const DODO_API_BASE: &str = "https://live.dodopayments.com";
 
 const DEV_DIR_TARGETS: &[(&str, &str)] = &[
     ("node_modules", "Node Modules"),
@@ -77,6 +82,85 @@ struct ScanIndex {
 }
 
 struct ScanState(Mutex<Option<ScanIndex>>);
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct LicenseState {
+    status: String,
+    masked_key: Option<String>,
+    activation_instance_id: Option<String>,
+    last_validated_at: Option<u64>,
+    can_use_paid_features: bool,
+    message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct StoredLicense {
+    key: String,
+    instance_id: Option<String>,
+    last_validated_at: Option<u64>,
+    consecutive_failures: u8,
+}
+
+fn keychain_read() -> Option<StoredLicense> {
+    let output = Command::new("security")
+        .args(["find-generic-password", "-s", LICENSE_SERVICE, "-w"])
+        .output().ok()?;
+    if !output.status.success() { return None; }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+fn keychain_write(value: &StoredLicense) -> Result<(), String> {
+    let encoded = serde_json::to_string(value).map_err(|e| e.to_string())?;
+    let status = Command::new("security")
+        .args(["add-generic-password", "-a", "reclaim", "-s", LICENSE_SERVICE, "-w", &encoded, "-U"])
+        .status().map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Unable to securely store the license in macOS Keychain".into()) }
+}
+
+fn now_secs() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() }
+
+fn machine_id() -> String {
+    let output = Command::new("ioreg").args(["-rd1", "-c", "IOPlatformExpertDevice"]).output();
+    if let Ok(output) = output {
+        let text = String::from_utf8_lossy(&output.stdout);
+        if let Some(value) = text.lines().find_map(|line| {
+            let marker = "IOPlatformUUID";
+            let start = line.find(marker)?.checked_add(marker.len())?;
+            let rest = &line[start..];
+            let first = rest.find('"')?.checked_add(1)?;
+            let tail = &rest[first..];
+            let end = tail.find('"')?;
+            Some(tail[..end].to_string())
+        }) { return value; }
+    }
+    std::env::var("HOSTNAME").unwrap_or_else(|_| "reclaim-device".into())
+}
+
+fn masked_key(key: &str) -> String {
+    if key.len() <= 8 { return "••••••••".into(); }
+    format!("{}••••{}", &key[..4], &key[key.len()-4..])
+}
+
+fn public_license_request(endpoint: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+    let body = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+    let output = Command::new("curl")
+        .args(["-fsS", "--max-time", "15", "-X", "POST", &format!("{DODO_API_BASE}{endpoint}"), "-H", "Content-Type: application/json", "-d", &body])
+        .output().map_err(|e| format!("Network request failed: {e}"))?;
+    if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); }
+    serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid licensing response: {e}"))
+}
+
+fn current_license_state() -> LicenseState {
+    match keychain_read() {
+        Some(stored) => LicenseState { status: "active".into(), masked_key: Some(masked_key(&stored.key)), activation_instance_id: stored.instance_id, last_validated_at: stored.last_validated_at, can_use_paid_features: stored.consecutive_failures < 2, message: None },
+        None => LicenseState { status: "unlicensed".into(), can_use_paid_features: false, ..Default::default() },
+    }
+}
+
+fn require_license() -> Result<(), String> {
+    if current_license_state().can_use_paid_features { Ok(()) } else { Err("A valid Reclaim license is required for cleanup actions.".into()) }
+}
 
 fn node_size(index: &ScanIndex, p: &Path) -> u64 {
     if index.dirs.contains(p) {
@@ -631,6 +715,72 @@ async fn find_duplicates(app_handle: tauri::AppHandle, min_size: u64) -> Result<
 }
 
 #[tauri::command]
+fn get_license_state() -> LicenseState {
+    current_license_state()
+}
+
+#[tauri::command]
+fn open_checkout_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://checkout.dodopayments.com/") {
+        return Err("Invalid checkout URL. Configure VITE_DODO_CHECKOUT_URL with a Dodo checkout URL.".into());
+    }
+    Command::new("open").arg(url).status().map_err(|e| e.to_string()).and_then(|status| {
+        if status.success() { Ok(()) } else { Err("Could not open the checkout in your browser.".into()) }
+    })
+}
+
+#[tauri::command]
+fn activate_license(key: String) -> Result<LicenseState, String> {
+    let key = key.trim().to_string();
+    if key.is_empty() { return Err("Enter the license key from your Dodo Payments receipt.".into()); }
+    let response = public_license_request("/licenses/activate", json!({
+        "license_key": key,
+        "name": format!("Reclaim on {}", machine_id()),
+    }))?;
+    let instance_id = response.get("id").and_then(|v| v.as_str()).map(str::to_string)
+        .or_else(|| response.get("license_key_instance_id").and_then(|v| v.as_str()).map(str::to_string));
+    let stored = StoredLicense { key: key.clone(), instance_id, last_validated_at: Some(now_secs()), consecutive_failures: 0 };
+    keychain_write(&stored)?;
+    Ok(current_license_state())
+}
+
+#[tauri::command]
+fn validate_license() -> Result<LicenseState, String> {
+    let mut stored = keychain_read().ok_or_else(|| "No license is activated.".to_string())?;
+    let response = public_license_request("/licenses/validate", json!({
+        "license_key": stored.key.clone(),
+        "license_key_instance_id": stored.instance_id,
+    }));
+    match response {
+        Ok(value) if value.get("valid").and_then(|v| v.as_bool()).unwrap_or(false) => {
+            stored.last_validated_at = Some(now_secs());
+            stored.consecutive_failures = 0;
+            keychain_write(&stored)?;
+            Ok(current_license_state())
+        }
+        Ok(_) => Err("This license is no longer valid.".into()),
+        Err(error) => {
+            stored.consecutive_failures = stored.consecutive_failures.saturating_add(1);
+            let _ = keychain_write(&stored);
+            if stored.consecutive_failures < 2 { Ok(current_license_state()) } else { Err(error) }
+        }
+    }
+}
+
+#[tauri::command]
+fn deactivate_license() -> Result<(), String> {
+    let stored = keychain_read().ok_or_else(|| "No license is activated.".to_string())?;
+    if let Some(instance_id) = stored.instance_id {
+        let _ = public_license_request("/licenses/deactivate", json!({
+            "license_key": stored.key,
+            "license_key_instance_id": instance_id,
+        }));
+    }
+    let status = Command::new("security").args(["delete-generic-password", "-s", LICENSE_SERVICE]).status().map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Unable to remove the license from Keychain".into()) }
+}
+
+#[tauri::command]
 fn get_home_dir() -> String {
     dirs::home_dir()
         .map(|p| p.to_string_lossy().into_owned())
@@ -655,6 +805,7 @@ async fn reveal_in_finder(path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
+    require_license()?;
     tauri::async_runtime::spawn_blocking(move || {
         for path in paths {
             if is_protected_path(&path) {
@@ -729,6 +880,7 @@ struct DeleteReport {
 
 #[tauri::command]
 async fn uninstall_app(app_path: String) -> Result<DeleteReport, String> {
+    require_license()?;
     // Stub implementation for uninstaller
     println!("Uninstalling app: {}", app_path);
     Ok(DeleteReport {
@@ -745,6 +897,7 @@ struct OrphanedLeftover {
 
 #[tauri::command]
 async fn find_orphaned_leftovers() -> Result<Vec<OrphanedLeftover>, String> {
+    require_license()?;
     // Stub implementation for orphaned leftovers detection
     Ok(vec![])
 }
@@ -935,6 +1088,11 @@ fn main() {
             get_leftover_candidates,
             search_files,
             find_duplicates,
+            get_license_state,
+            open_checkout_url,
+            activate_license,
+            validate_license,
+            deactivate_license,
             get_home_dir,
             reveal_in_finder,
             move_to_trash,

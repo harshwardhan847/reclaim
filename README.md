@@ -67,6 +67,21 @@ pnpm install
 pnpm tauri dev      # run the app with hot reload
 ```
 
+## Dodo Payments licensing
+
+Create a Dodo one-time product priced at $19.99, enable License Keys, and set
+the activation limit to three devices. Provide its hosted checkout URL when
+building the app:
+
+```bash
+VITE_DODO_CHECKOUT_URL=https://checkout.dodopayments.com/buy/<product-id> pnpm tauri dev
+```
+
+The app activates and validates keys through Dodo's public license endpoints
+and stores the resulting license state in macOS Keychain. No Dodo merchant API
+secret belongs in the desktop app. Cleanup discovery is free; destructive
+cleanup actions require the active license.
+
 Other scripts:
 - `pnpm build` — typecheck + build the frontend (`tsc -b && vite build`)
 - `pnpm lint` — oxlint
