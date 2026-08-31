@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Button } from './ui/button'
 import { invoke } from '@tauri-apps/api/core'
 import { Check, Crown, KeyRound, Loader2, X } from 'lucide-react'
@@ -22,19 +23,21 @@ export function UpgradeModal({ benefit, onClose, onActivated }: { benefit: strin
     finally { setActivating(false) }
   }
 
-  return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
       <button aria-label="Close upgrade dialog" className="absolute inset-0 bg-black/70 backdrop-blur-md" onClick={onClose} />
-      <div className="relative w-full max-w-md rounded-3xl border border-primary/30 bg-neutral-950 p-7 shadow-2xl shadow-primary/20">
+      <div role="dialog" aria-modal="true" aria-labelledby="upgrade-title" className="relative max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-3xl border border-primary/30 bg-neutral-950 p-7 shadow-2xl shadow-primary/20">
         <button onClick={onClose} className="absolute right-4 top-4 rounded-lg p-2 text-neutral-500 hover:bg-white/10 hover:text-white"><X size={18} /></button>
         <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/20 text-primary"><Crown size={28} /></div>
-        <h2 className="text-center text-2xl font-bold text-white">Unlock {benefit}</h2>
-        <p className="mt-2 text-center text-sm text-neutral-400">You found the space. Pro lets you safely reclaim it.</p>
+        <h2 id="upgrade-title" className="text-center text-2xl font-bold text-white">Unlock {benefit}</h2>
+        <p className="mt-2 text-center text-sm text-neutral-400">Turn hidden disk usage into usable space with safe, powerful cleanup tools.</p>
         <div className="mt-6 space-y-3 rounded-2xl border border-white/10 bg-white/[.03] p-4 text-sm text-neutral-200">
           {[
-            ['See and clean everything found', 'Turn recoverable space into real free storage.'],
-            ['One-click bulk cleanup', 'Clean duplicates, caches, leftovers and developer junk together.'],
-            ['Safe by default', 'Items move to Trash first, so cleanup stays recoverable.'],
+            ['Find what is consuming your Mac', 'Scan beyond the basics and see large files, duplicates, caches and hidden leftovers in one clear overview.'],
+            ['Recover more space, faster', 'Clean multiple categories in one pass instead of hunting through folders manually.'],
+            ['Remove duplicate files', 'Spot repeated photos, downloads and project files so you can reclaim wasted storage confidently.'],
+            ['Clean developer and AI clutter', 'Remove old node_modules, build outputs, package caches, logs and model data that quietly grow over time.'],
+            ['Stay safe and in control', 'Review every selection first; cleanup moves items to the Trash so they remain recoverable.'],
           ].map(([title, copy]) => <div key={title} className="flex gap-3"><Check size={16} className="mt-0.5 shrink-0 text-emerald-400" /><div><p className="font-semibold text-white">{title}</p><p className="mt-0.5 text-xs text-neutral-500">{copy}</p></div></div>)}
         </div>
         <Button onClick={() => invoke('open_checkout_url', { url: checkoutUrl }).catch(err => alert(String(err)))} className="mt-6 h-12 w-full bg-primary text-white hover:bg-primary/90">Get Lifetime Access</Button>
@@ -46,6 +49,7 @@ export function UpgradeModal({ benefit, onClose, onActivated }: { benefit: strin
         {error && <p className="mt-2 text-xs text-red-300">{error}</p>}
         <p className="mt-3 text-center text-xs text-neutral-600">One-time payment · license key delivered by Dodo Payments</p>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
