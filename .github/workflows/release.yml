@@ -40,17 +40,22 @@ jobs:
           # produced and the in-app updater has nothing to install.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS code signing + notarization -- optional until these secrets
-          # exist. tauri-action produces an unsigned build when they're
-          # unset, so this workflow is testable before the Apple Developer
-          # account is ready; adding the secrets later "turns on" signing
-          # with no further changes here.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # macOS code signing + notarization -- DELIBERATELY DISABLED for now
+          # (shipping unsigned until the Apple Developer ID Application
+          # certificate is set up). Producing an unsigned build is the
+          # correct end state as long as these are unset -- do not set them
+          # to empty-but-present secrets, that's what caused the
+          # "failed to import keychain certificate" failure last time.
+          #
+          # To re-enable: uncomment these six lines, add the matching
+          # secrets in GitHub (Settings -> Secrets and variables -> Actions),
+          # and push a new tag. No other changes needed.
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Reclaim ${{ github.ref_name }}"
