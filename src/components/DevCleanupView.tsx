@@ -16,6 +16,7 @@ export type DevDirectory = {
 interface DevCleanupViewProps {
   scanResult: ScanNode | null;
   onDelete: (items: { path: string; size: number }[]) => void;
+  deletedPaths?: string[];
   onUpgrade?: () => void;
   onItemsChange?: (items: DevDirectory[]) => void;
 }
@@ -132,7 +133,7 @@ const CategoryGroup = React.memo(function CategoryGroup({
   );
 });
 
-function DevCleanupView({ scanResult, onDelete, onUpgrade, onItemsChange }: DevCleanupViewProps) {
+function DevCleanupView({ scanResult, onDelete, deletedPaths, onUpgrade, onItemsChange }: DevCleanupViewProps) {
   const [directories, setDirectories] = useState<DevDirectory[]>([]);
   const { isPro } = usePro();
   const [loading, setLoading] = useState(false);
@@ -145,7 +146,7 @@ function DevCleanupView({ scanResult, onDelete, onUpgrade, onItemsChange }: DevC
     setLoading(true);
     setScanError(null);
     try {
-      const result = await invoke<DevDirectory[]>('find_dev_directories', { path: '/Users' });
+      const result = await invoke<DevDirectory[]>('get_dev_directories');
       setDirectories(result || []);
       setScanned(true);
     } catch (error) {
@@ -170,6 +171,20 @@ function DevCleanupView({ scanResult, onDelete, onUpgrade, onItemsChange }: DevC
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanResult]);
+
+  // Trims out whatever the parent just successfully moved to trash, so this
+  // list stays in sync without needing a full rescan/re-walk.
+  useEffect(() => {
+    if (!deletedPaths || deletedPaths.length === 0) return
+    const deleted = new Set(deletedPaths)
+    setDirectories(prev => prev.filter(d => !deleted.has(d.path)))
+    setSelectedPaths(prev => {
+      if (![...prev].some(p => deleted.has(p))) return prev
+      const next = new Set(prev)
+      deleted.forEach(p => next.delete(p))
+      return next
+    })
+  }, [deletedPaths]);
 
   const grouped = useMemo(() => {
     const groups: Record<string, DevDirectory[]> = {};
@@ -268,12 +283,12 @@ function DevCleanupView({ scanResult, onDelete, onUpgrade, onItemsChange }: DevC
         {scanError && (
           <div className="mb-4 flex items-center gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/20 px-4 py-2 rounded-lg max-w-md text-center">
             <AlertTriangle className="w-4 h-4 shrink-0" />
-            <span>Scan failed: {scanError}. This can happen if Reclaim doesn't have permission to read {'/Users'} — check Full Disk Access in System Settings, then try again.</span>
+            <span>{scanError}</span>
           </div>
         )}
         <Button onClick={handleScan} className="bg-red-600 hover:bg-red-700 text-white gap-2">
           <HardDrive className="w-4 h-4" />
-          {scanError ? 'Retry Scan' : 'Scan /Users Directory'}
+          {scanError ? 'Retry' : 'Find Dev Directories'}
         </Button>
       </div>
     );

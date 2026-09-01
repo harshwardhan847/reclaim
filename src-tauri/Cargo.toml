@@ -28,6 +28,7 @@ tauri-plugin-dialog = "2.0.0-rc"
 rayon = "1.10"
 tauri-plugin-updater = "2.0.0-beta.0"
 tauri-plugin-process = "2.0.0-beta.0"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [profile.release]
 lto = true

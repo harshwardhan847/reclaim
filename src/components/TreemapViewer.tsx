@@ -15,13 +15,15 @@ export interface ScanNode {
   children?: ScanNode[]
 }
 
-function TreemapViewer({ 
-  data, 
+function TreemapViewer({
+  data,
   onStageItem,
+  onDelete,
   onUpgrade,
-}: { 
+}: {
   data: ScanNode | null,
   onStageItem?: (node: ScanNode) => void,
+  onDelete?: (items: { path: string; size: number }[]) => void,
   onUpgrade?: () => void,
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -362,7 +364,7 @@ function TreemapViewer({
                 {isPro ? 'Reveal in Finder' : <span className="inline-flex items-center gap-1.5"><LockKeyhole size={13} className="text-amber-300" /> Reveal in Finder · PRO</span>}
               </button>
               <button className="w-full text-left px-4 py-2 hover:bg-primary/20 hover:text-white transition-colors" onClick={() => { const node = contextMenu.node; setContextMenu(null); if (!isPro) { onUpgrade?.(); return } onStageItem?.(node) }}>{isPro ? 'Add to Cleanup List' : <span className="inline-flex items-center gap-1.5"><LockKeyhole size={13} className="text-amber-300" /> Add to Cleanup List · PRO</span>}</button>
-              <button className="w-full text-left px-4 py-2 text-red-300 hover:bg-red-500/20" onClick={async () => { const node = contextMenu.node; setContextMenu(null); if (!isPro) { onUpgrade?.(); return } const { invoke } = await import('@tauri-apps/api/core'); await invoke('move_to_trash', { paths: [node.path] }).catch(err => alert(String(err))) }}>{isPro ? 'Move to Trash' : <span className="inline-flex items-center gap-1.5"><LockKeyhole size={13} className="text-amber-300" /> Move to Trash · PRO</span>}</button>
+              <button className="w-full text-left px-4 py-2 text-red-300 hover:bg-red-500/20" onClick={() => { const node = contextMenu.node; setContextMenu(null); if (!isPro) { onUpgrade?.(); return } onDelete?.([{ path: node.path, size: node.size }]) }}>{isPro ? 'Move to Trash' : <span className="inline-flex items-center gap-1.5"><LockKeyhole size={13} className="text-amber-300" /> Move to Trash · PRO</span>}</button>
             </div>
           </div>
         )}

@@ -12,6 +12,7 @@ export type SafeDeleteItem = { path: string; name: string; size: number }
 interface DuplicateViewProps {
   scanResult: ScanNode | null
   onDelete: (items: { path: string; size: number }[]) => void
+  deletedPaths?: string[]
   onItemsChange?: (items: SafeDeleteItem[]) => void
   onUpgrade?: () => void
 }
@@ -23,7 +24,7 @@ interface DuplicateGroupResult {
 
 const MIN_DUPLICATE_SIZE = 1024 * 1024 // ignore files under 1MB
 
-function DuplicateView({ scanResult, onDelete, onItemsChange, onUpgrade }: DuplicateViewProps) {
+function DuplicateView({ scanResult, onDelete, deletedPaths, onItemsChange, onUpgrade }: DuplicateViewProps) {
   const { isPro } = usePro();
   const [loading, setLoading] = useState(false)
   const [hasRun, setHasRun] = useState(false)
@@ -118,6 +119,23 @@ function DuplicateView({ scanResult, onDelete, onItemsChange, onUpgrade }: Dupli
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanResult])
+
+  // Trims out whatever the parent just successfully moved to trash. A group
+  // reduced to a single remaining copy is no longer a duplicate pair, so it
+  // gets dropped entirely rather than left showing one lonely "Original".
+  useEffect(() => {
+    if (!deletedPaths || deletedPaths.length === 0) return
+    const deleted = new Set(deletedPaths)
+    setDuplicateGroups(prev => prev
+      .map(group => ({ ...group, paths: group.paths.filter(p => !deleted.has(p)) }))
+      .filter(group => group.paths.length > 1))
+    setSelectedPaths(prev => {
+      if (![...prev].some(p => deleted.has(p))) return prev
+      const next = new Set(prev)
+      deleted.forEach(p => next.delete(p))
+      return next
+    })
+  }, [deletedPaths])
 
   const toggleSelect = (path: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()

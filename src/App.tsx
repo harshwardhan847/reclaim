@@ -26,7 +26,40 @@ interface ScanSummary {
   aiCacheSize: number
 }
 
+interface DeleteResult {
+  deletedPaths: string[]
+  errors: string[]
+}
+
 const LARGE_FILE_MIN_SIZE = 100 * 1024 * 1024
+
+// Removes trashed paths from a cached scan tree in place (structurally --
+// returns new objects) so the treemap/search reflect a delete immediately
+// instead of needing a full rescan. Mirrors remove_path_from_index on the
+// Rust side: subtracts the removed size from every ancestor along the way.
+function pruneTree(node: ScanNode, deleted: Set<string>): ScanNode | null {
+  if (deleted.has(node.path)) return null
+  if (!node.children) return node
+
+  let removedSize = 0
+  const nextChildren: ScanNode[] = []
+  for (const child of node.children) {
+    const pruned = pruneTree(child, deleted)
+    if (pruned === null) {
+      removedSize += child.size
+    } else {
+      if (pruned !== child) removedSize += child.size - pruned.size
+      nextChildren.push(pruned)
+    }
+  }
+  if (removedSize === 0) return node
+  return { ...node, size: node.size - removedSize, children: nextChildren }
+}
+
+function pruneList<T extends { path: string }>(list: T[] | null, deleted: Set<string>): T[] | null {
+  if (!list) return list
+  return list.filter(item => !deleted.has(item.path))
+}
 
 function App() {
   const [scanning, setScanning] = useState(false)
@@ -41,7 +74,7 @@ function App() {
   const [confirmDelete, setConfirmDelete] = useState<{ paths: string[], size: number } | null>(null)
   const [isInitializing, setIsInitializing] = useState(true)
   const [isDeleting, setIsDeleting] = useState(false)
-  const [scanTarget, setScanTarget] = useState<string>('/Users/harshwardhan')
+  const [scanTarget, setScanTarget] = useState<string>('')
   const { license, setLicense } = usePro()
   const [upgradeBenefit, setUpgradeBenefit] = useState<string | null>(null)
 
@@ -62,6 +95,12 @@ function App() {
   const [duplicateItems, setDuplicateItems] = useState<SafeDeleteItem[] | null>(null)
   const [devDirectories, setDevDirectories] = useState<DevDirectory[] | null>(null)
 
+  // Bumped with a fresh array (new reference) on every successful delete so
+  // DuplicateView/DevCleanupView -- which own their own result lists derived
+  // from dedicated backend commands -- can prune the exact paths that were
+  // just trashed instead of the parent needing to know their internals.
+  const [lastDeletedPaths, setLastDeletedPaths] = useState<string[]>([])
+
   // Listen for Cmd+K globally
   useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -80,6 +119,12 @@ function App() {
       .then(apps => setInstalledApps(apps))
       .catch(console.error)
       .finally(() => setInstalledAppsLoaded(true))
+
+    // Default the scan target to this machine's actual home dir, falling
+    // back to '/' (a real, always-valid path) rather than a hardcoded user.
+    invoke<string>('get_home_dir')
+      .then(home => setScanTarget(home || '/'))
+      .catch(() => setScanTarget('/'))
 
     setIsInitializing(false)
 
@@ -155,8 +200,8 @@ function App() {
     let target = '/';
     if (type === 'home') {
       try {
-        target = await invoke('get_home_dir') || '/Users/harshwardhan';
-      } catch (e) { target = '/Users/harshwardhan'; }
+        target = await invoke('get_home_dir') || '/';
+      } catch (e) { target = '/'; }
     } else if (type === 'custom') {
       try {
         const { open } = await import('@tauri-apps/plugin-dialog');
@@ -191,14 +236,51 @@ function App() {
     })
   }
 
+  // Patches every locally cached view (scan tree, badges, and the flat
+  // result lists) to drop whatever the backend actually trashed, instead of
+  // requiring the user to trigger a full disk rescan after every delete.
+  // move_to_trash already patched its own server-side ScanIndex the same
+  // way, so this just mirrors that on the frontend's copies of the data.
+  const applyDeleteResult = useCallback((result: DeleteResult) => {
+    if (result.deletedPaths.length === 0) return
+    const deleted = new Set(result.deletedPaths)
+
+    // Size deltas are computed up front from the current lists (rather than
+    // inside a setLargeFiles/setAiCaches updater) so every setState call
+    // here stays a pure function of its own previous value -- calling
+    // setScanBadges as a side effect from inside another setter's updater
+    // would double-apply under StrictMode's dev-mode double-invocation.
+    const removedLargeSize = (largeFiles ?? []).filter(f => deleted.has(f.path)).reduce((sum, f) => sum + f.size, 0)
+    const removedAiSize = (aiCaches ?? []).filter(f => deleted.has(f.path)).reduce((sum, f) => sum + f.size, 0)
+
+    setScanResult(prev => (prev ? pruneTree(prev, deleted) : prev))
+    if (removedLargeSize > 0 || removedAiSize > 0) {
+      setScanBadges(b => ({
+        largeFilesSize: Math.max(0, b.largeFilesSize - removedLargeSize),
+        aiCacheSize: Math.max(0, b.aiCacheSize - removedAiSize),
+      }))
+    }
+    setLargeFiles(prev => pruneList(prev, deleted))
+    setAiCaches(prev => pruneList(prev, deleted))
+    setLeftoverData(prev => pruneList(prev, deleted))
+    setStagedDeletes(prev => prev.filter(n => !deleted.has(n.path)))
+    // Lets DuplicateView/DevCleanupView -- which own their own result lists
+    // sourced from separate backend commands -- prune the same paths.
+    setLastDeletedPaths(result.deletedPaths)
+  }, [largeFiles, aiCaches])
+
   const handleConfirmDelete = async () => {
     if (!license?.canUsePaidFeatures) { alert('Activate your Reclaim license to clean files.'); return }
     const paths = stagedDeletes.map(n => n.path)
     try {
-      await invoke('move_to_trash', { paths })
-      setStagedDeletes([])
+      const result = await invoke<DeleteResult>('move_to_trash', { paths })
+      applyDeleteResult(result)
       setIsTrashOpen(false)
-      alert('Moved to trash!')
+      if (result.errors.length > 0) {
+        alert(`Moved ${result.deletedPaths.length} item(s) to trash. ${result.errors.length} failed:\n${result.errors.join('\n')}`)
+      } else {
+        alert('Moved to trash!')
+      }
     } catch (err) {
       console.error(err)
       alert(`Error deleting: ${err}`)
@@ -215,9 +297,16 @@ function App() {
     if (!confirmDelete) return
     setIsDeleting(true)
     try {
-      await invoke('move_to_trash', { paths: confirmDelete.paths })
+      const result = await invoke<DeleteResult>('move_to_trash', { paths: confirmDelete.paths })
+      applyDeleteResult(result)
       // Delay alert slightly so UI updates first
-      setTimeout(() => alert('Items moved to trash! Please rescan to update overview.'), 100)
+      setTimeout(() => {
+        if (result.errors.length > 0) {
+          alert(`Moved ${result.deletedPaths.length} item(s) to trash. ${result.errors.length} failed:\n${result.errors.join('\n')}`)
+        } else {
+          alert('Items moved to trash!')
+        }
+      }, 100)
     } catch (err) {
       console.error(err)
       alert(`Error deleting: ${err}`)
@@ -388,7 +477,7 @@ function App() {
                 </div>
                 <div className="flex-1 min-h-0">
                   {overviewView === 'map' ? (
-                    <TreemapViewer data={scanResult} onStageItem={handleStageItem} onUpgrade={() => setUpgradeBenefit('treemap actions')} />
+                    <TreemapViewer data={scanResult} onStageItem={handleStageItem} onDelete={handleSmartDelete} onUpgrade={() => setUpgradeBenefit('treemap actions')} />
                   ) : (
                     <QuickCleanView
                       items={quickCleanItems}
@@ -416,7 +505,7 @@ function App() {
                   <DuplicateView
                   scanResult={scanResult}
                   onDelete={handleSmartDelete}
-
+                  deletedPaths={lastDeletedPaths}
                   onUpgrade={() => setUpgradeBenefit('duplicate cleanup')}
                   onItemsChange={setDuplicateItems}
                 />
@@ -468,7 +557,7 @@ function App() {
               {/* Dev Cleanup */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'dev_cleanup' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
-                  <DevCleanupView scanResult={scanResult} onDelete={handleSmartDelete} onUpgrade={() => setUpgradeBenefit('developer cleanup')} onItemsChange={setDevDirectories} />
+                  <DevCleanupView scanResult={scanResult} onDelete={handleSmartDelete} deletedPaths={lastDeletedPaths} onUpgrade={() => setUpgradeBenefit('developer cleanup')} onItemsChange={setDevDirectories} />
                 </div>
               </div>
 </div>

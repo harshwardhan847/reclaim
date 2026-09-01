@@ -76,6 +76,7 @@ struct DuplicateGroup {
 /// drill-down) can query it directly instead of the frontend re-walking a
 /// giant JSON tree it was handed once.
 struct ScanIndex {
+    root: PathBuf,
     sizes: HashMap<PathBuf, u64>,
     dirs: HashSet<PathBuf>,
     dir_children: HashMap<PathBuf, Vec<PathBuf>>,
@@ -147,25 +148,33 @@ fn masked_key(key: &str) -> String {
     format!("{}••••{}", &key[..4], &key[key.len()-4..])
 }
 
-fn public_license_request(endpoint: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
-    let body_str = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-    let output = Command::new("curl")
-        .args(["-sS", "--max-time", "15", "-X", "POST", &format!("{DODO_API_BASE}{endpoint}"), "-H", "Content-Type: application/json", "-d", &body_str])
-        .output().map_err(|e| format!("Network request failed: {e}"))?;
-        
-    if !output.status.success() { 
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); 
-    }
-    
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+fn http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
+async fn public_license_request(endpoint: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+    let client = http_client()?;
+    let response = client
+        .post(format!("{DODO_API_BASE}{endpoint}"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network request failed: {e}"))?;
+
+    let json: serde_json::Value = response
+        .json()
+        .await
         .map_err(|e| format!("Invalid licensing response: {e}"))?;
-        
+
     if let Some(msg) = json.get("message").and_then(|m| m.as_str()) {
         if json.get("code").is_some() || json.get("status").is_some() || json.get("error").is_some() {
             return Err(msg.to_string());
         }
     }
-    
+
     Ok(json)
 }
 
@@ -185,6 +194,61 @@ fn node_size(index: &ScanIndex, p: &Path) -> u64 {
         *index.dir_sizes.get(p).unwrap_or(&0)
     } else {
         *index.sizes.get(p).unwrap_or(&0)
+    }
+}
+
+fn collect_subtree(index: &ScanIndex, root: &Path, out: &mut Vec<PathBuf>) {
+    out.push(root.to_path_buf());
+    if let Some(children) = index.dir_children.get(root) {
+        for child in children.clone() {
+            if index.dirs.contains(&child) {
+                collect_subtree(index, &child, out);
+            } else {
+                out.push(child);
+            }
+        }
+    }
+}
+
+/// Removes a successfully-trashed path (file or directory) from the cached
+/// ScanIndex, so every derived view (badges, treemap, large files, ...)
+/// reflects the delete immediately instead of requiring a full rescan.
+fn remove_path_from_index(index: &mut ScanIndex, path: &Path) {
+    let size = node_size(index, path);
+
+    let subtree: Vec<PathBuf> = if index.dirs.contains(path) {
+        let mut out = Vec::new();
+        collect_subtree(index, path, &mut out);
+        out
+    } else {
+        vec![path.to_path_buf()]
+    };
+
+    for p in &subtree {
+        index.sizes.remove(p);
+        index.dirs.remove(p);
+        index.dir_sizes.remove(p);
+        index.dir_children.remove(p);
+        index.ai_cache_paths.remove(p);
+    }
+
+    let Some(parent) = path.parent() else { return };
+    if let Some(children) = index.dir_children.get_mut(parent) {
+        children.retain(|c| c != path);
+    }
+
+    // Walk up the ancestor chain subtracting this node's size from each
+    // cached directory total, stopping once we're outside the scanned tree.
+    let mut current = parent.to_path_buf();
+    loop {
+        match index.dir_sizes.get_mut(&current) {
+            Some(dir_size) => *dir_size = dir_size.saturating_sub(size),
+            None => break,
+        }
+        match current.parent() {
+            Some(p) => current = p.to_path_buf(),
+            None => break,
+        }
     }
 }
 
@@ -482,7 +546,7 @@ async fn scan_path(
         // get_ai_cache_files / get_leftover_candidates / find_duplicates /
         // search_files can all answer from memory without re-walking disk or
         // shipping the whole tree to the frontend.
-        let index = ScanIndex { sizes, dirs, dir_children, dir_sizes, ai_cache_paths };
+        let index = ScanIndex { root: PathBuf::from(&path), sizes, dirs, dir_children, dir_sizes, ai_cache_paths };
         let state = app_handle.state::<ScanState>();
         *state.0.write().map_err(|_| "Scan lock poisoned".to_string())? = Some(index);
 
@@ -788,17 +852,21 @@ struct LocalizedPrice {
 // Payments directly -- that keeps the merchant API key off every installed
 // copy of this app and off the wire between users' machines and Dodo.
 #[tauri::command]
-fn get_localized_price() -> Result<LocalizedPrice, String> {
-    let output = Command::new("curl")
-        .args(["-sS", "--max-time", "8", PRICE_API_URL])
-        .output()
+async fn get_localized_price() -> Result<LocalizedPrice, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let response = client
+        .get(PRICE_API_URL)
+        .send()
+        .await
         .map_err(|e| format!("Network request failed: {e}"))?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-
-    serde_json::from_slice::<LocalizedPrice>(&output.stdout)
+    response
+        .json::<LocalizedPrice>()
+        .await
         .map_err(|e| format!("Invalid price response: {e}"))
 }
 
@@ -813,13 +881,13 @@ fn open_checkout_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn activate_license(key: String) -> Result<LicenseState, String> {
+async fn activate_license(key: String) -> Result<LicenseState, String> {
     let key = key.trim().to_string();
     if key.is_empty() { return Err("Enter the license key from your Dodo Payments receipt.".into()); }
     let response = public_license_request("/licenses/activate", json!({
         "license_key": key,
         "name": format!("Reclaim on {}", machine_id()),
-    }))?;
+    })).await?;
     let instance_id = response.get("id").and_then(|v| v.as_str()).map(str::to_string)
         .or_else(|| response.get("license_key_instance_id").and_then(|v| v.as_str()).map(str::to_string));
         
@@ -833,12 +901,12 @@ fn activate_license(key: String) -> Result<LicenseState, String> {
 }
 
 #[tauri::command]
-fn validate_license() -> Result<LicenseState, String> {
+async fn validate_license() -> Result<LicenseState, String> {
     let mut stored = keychain_read().ok_or_else(|| "No license is activated.".to_string())?;
     let response = public_license_request("/licenses/validate", json!({
         "license_key": stored.key.clone(),
         "license_key_instance_id": stored.instance_id,
-    }));
+    })).await;
     match response {
         Ok(value) if value.get("valid").and_then(|v| v.as_bool()).unwrap_or(false) => {
             stored.last_validated_at = Some(now_secs());
@@ -856,13 +924,13 @@ fn validate_license() -> Result<LicenseState, String> {
 }
 
 #[tauri::command]
-fn deactivate_license() -> Result<(), String> {
+async fn deactivate_license() -> Result<(), String> {
     let stored = keychain_read().ok_or_else(|| "No license is activated.".to_string())?;
     if let Some(instance_id) = stored.instance_id {
         let _ = public_license_request("/licenses/deactivate", json!({
             "license_key": stored.key,
             "license_key_instance_id": instance_id,
-        }));
+        })).await;
     }
     let status = Command::new("security").args(["delete-generic-password", "-s", LICENSE_SERVICE]).status().map_err(|e| e.to_string())?;
     if status.success() { Ok(()) } else { Err("Unable to remove the license from Keychain".into()) }
@@ -891,32 +959,73 @@ async fn reveal_in_finder(path: String) -> Result<(), String> {
     .unwrap_or_else(|_| Err("Reveal task failed".to_string()))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteResult {
+    deleted_paths: Vec<String>,
+    errors: Vec<String>,
+}
+
 #[tauri::command]
-async fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
+async fn move_to_trash(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<DeleteResult, String> {
     require_license()?;
     tauri::async_runtime::spawn_blocking(move || {
+        use rayon::prelude::*;
+
         let mut errors: Vec<String> = Vec::new();
+        let candidates: Vec<String> = paths
+            .into_iter()
+            .filter(|path| {
+                if is_protected_path(path) {
+                    let err = format!("Access Denied: '{}' is a protected macOS system path and cannot be deleted.", path);
+                    log::error!("{}", err);
+                    errors.push(err);
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
 
-        for path in paths {
-            if is_protected_path(&path) {
-                let err = format!("Access Denied: '{}' is a protected macOS system path and cannot be deleted.", path);
-                log::error!("{}", err);
-                errors.push(err);
-                continue;
-            }
+        // Independent per-path trash operations -- parallelize across all
+        // cores instead of one syscall-heavy delete at a time, same
+        // rationale as find_duplicates.
+        let results: Vec<Result<String, String>> = candidates
+            .into_par_iter()
+            .map(|path| match trash::delete(&path) {
+                Ok(()) => Ok(path),
+                Err(e) => Err(format!("Failed to move to trash: {} - {}", path, e)),
+            })
+            .collect();
 
-            if let Err(e) = trash::delete(&path) {
-                let err = format!("Failed to move to trash: {} - {}", path, e);
-                log::error!("{}", err);
-                errors.push(err);
+        let mut deleted_paths: Vec<String> = Vec::new();
+        for result in results {
+            match result {
+                Ok(path) => deleted_paths.push(path),
+                Err(err) => {
+                    log::error!("{}", err);
+                    errors.push(err);
+                }
             }
         }
+        deleted_paths.sort();
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.join("; "))
+        // Patch the cached scan index in place so badges, the treemap and
+        // every list view reflect the delete immediately without the user
+        // needing to trigger a full rescan.
+        if !deleted_paths.is_empty() {
+            let state = app_handle.state::<ScanState>();
+            if let Ok(mut guard) = state.0.write() {
+                let index_opt = guard.as_mut();
+                if let Some(index) = index_opt {
+                    for path in &deleted_paths {
+                        remove_path_from_index(index, Path::new(path));
+                    }
+                }
+            };
         }
+
+        Ok(DeleteResult { deleted_paths, errors })
     })
     .await
     .unwrap_or_else(|_| Err("Trash task failed".to_string()))
@@ -967,36 +1076,6 @@ async fn get_installed_apps() -> Result<Vec<String>, String> {
     })
     .await
     .unwrap_or_else(|_| Err("App fetch task failed".to_string()))
-}
-
-#[derive(Serialize)]
-struct DeleteReport {
-    deleted_paths: Vec<String>,
-    total_size: u64,
-}
-
-#[tauri::command]
-async fn uninstall_app(app_path: String) -> Result<DeleteReport, String> {
-    require_license()?;
-    // Stub implementation for uninstaller
-    log::info!("Uninstalling app: {}", app_path);
-    Ok(DeleteReport {
-        deleted_paths: vec![app_path],
-        total_size: 0,
-    })
-}
-
-#[derive(Serialize)]
-struct OrphanedLeftover {
-    path: String,
-    size: u64,
-}
-
-#[tauri::command]
-async fn find_orphaned_leftovers() -> Result<Vec<OrphanedLeftover>, String> {
-    require_license()?;
-    // Stub implementation for orphaned leftovers detection
-    Ok(vec![])
 }
 
 #[tauri::command]
@@ -1097,125 +1176,59 @@ struct DevDirectory {
     category: String,
 }
 
-/// A dev directory matched during the walk, before its size has been
-/// computed. Size is filled in afterwards, in parallel (see below).
-struct MatchedDevDir {
-    path: String,
-    name: String,
-    category: &'static str,
+/// Recursively finds dev directories (node_modules, target, .venv, ...)
+/// purely from the already-cached ScanIndex -- no disk I/O at all. A match
+/// stops recursion into its own children (its bytes are already included in
+/// its own dir_sizes total, and DEV_DIR_TARGETS names don't nest into more
+/// dev targets that would need separate reporting).
+fn collect_dev_dirs(
+    dir: &Path,
+    index: &ScanIndex,
+    out: &mut Vec<DevDirectory>,
+) {
+    let Some(children) = index.dir_children.get(dir) else { return };
+    for child in children {
+        if !index.dirs.contains(child) {
+            continue;
+        }
+        let dir_name = file_name_of(child);
+
+        // Cargo.toml presence is answered from the already-scanned file
+        // list (a HashMap lookup) instead of a fresh disk stat.
+        let is_rust_target = dir_name == "target" && index.sizes.contains_key(&dir.join("Cargo.toml"));
+        let category = if is_rust_target {
+            Some("Rust Targets")
+        } else {
+            DEV_DIR_TARGETS.iter().find(|(name, _)| *name == dir_name).map(|(_, cat)| *cat)
+        };
+
+        if let Some(cat) = category {
+            out.push(DevDirectory {
+                path: child.to_string_lossy().into_owned(),
+                name: dir_name,
+                size: *index.dir_sizes.get(child).unwrap_or(&0),
+                category: cat.to_string(),
+            });
+        } else {
+            collect_dev_dirs(child, index, out);
+        }
+    }
 }
 
 #[tauri::command]
-async fn find_dev_directories(path: String) -> Result<Vec<DevDirectory>, String> {
+async fn get_dev_directories(app_handle: tauri::AppHandle) -> Result<Vec<DevDirectory>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        use rayon::prelude::*;
-        use std::sync::{Arc, Mutex};
+        let state = app_handle.state::<ScanState>();
+        let guard = state.0.read().map_err(|_| "Scan lock poisoned".to_string())?;
+        let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
 
-        // Whether `<dir>/Cargo.toml` exists, keyed by the candidate "target"
-        // directory's parent. The pruning pass (below, in process_read_dir)
-        // and the classification pass (in the main loop) both need this for
-        // the same directories -- every "target" dir is first seen as a
-        // child during its parent's process_read_dir call, then again as the
-        // entry itself once jwalk visits it -- so we compute it once and
-        // share it via this cache instead of stat-ing Cargo.toml twice.
-        let cargo_toml_cache: Arc<Mutex<HashMap<PathBuf, bool>>> = Arc::new(Mutex::new(HashMap::new()));
-        let has_cargo_toml = |cache: &Arc<Mutex<HashMap<PathBuf, bool>>>, parent: &Path| -> bool {
-            let mut cache = cache.lock().unwrap();
-            *cache
-                .entry(parent.to_path_buf())
-                .or_insert_with(|| parent.join("Cargo.toml").exists())
-        };
-
-        let mut matched: Vec<MatchedDevDir> = Vec::new();
-
-        let cache_for_prune = cargo_toml_cache.clone();
-        for entry in jwalk::WalkDir::new(&path)
-            .skip_hidden(false)
-            .process_read_dir(move |_depth, _path, _read_dir_state, children| {
-                // Prune descent into any directory that matches one of our
-                // targets (node_modules, .venv, target, ...): the dedicated
-                // sizing pass below sums its size separately, so without this
-                // every file inside it would otherwise be visited twice.
-                for child_result in children.iter_mut() {
-                    if let Ok(child) = child_result {
-                        if !child.file_type().is_dir() {
-                            continue;
-                        }
-                        let dir_name = child.file_name().to_string_lossy().to_string();
-                        let is_rust_target = dir_name == "target"
-                            && child.path().parent().map(|p| has_cargo_toml(&cache_for_prune, p)).unwrap_or(false);
-                        let is_target = is_rust_target || DEV_DIR_TARGETS.iter().any(|(name, _)| *name == dir_name);
-                        if is_target {
-                            child.read_children = None;
-                        }
-                    }
-                }
-            })
-        {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if !entry.file_type().is_dir() { continue; }
-
-            let dir_name = entry.file_name().to_string_lossy().to_string();
-            let dir_path_str = entry.path().to_string_lossy().to_string();
-
-            let dominated = matched.iter().any(|r| dir_path_str.starts_with(&r.path));
-            if dominated { continue; }
-
-            let category = if dir_name == "target" {
-                entry.path().parent()
-                    .filter(|p| has_cargo_toml(&cargo_toml_cache, p))
-                    .map(|_| "Rust Targets")
-            } else {
-                DEV_DIR_TARGETS.iter().find(|(name, _)| *name == dir_name).map(|(_, cat)| *cat)
-            };
-
-            if let Some(cat) = category {
-                matched.push(MatchedDevDir {
-                    path: dir_path_str,
-                    name: dir_name,
-                    category: cat,
-                });
-            }
-        }
-
-        // Each matched directory's size is an independent, potentially large
-        // sequential re-walk -- runs across all cores instead of one at a
-        // time. The inner walk is forced Serial: jwalk::WalkDir defaults to
-        // *also* parallelizing itself on rayon's global pool, and having
-        // every one of these inner walks compete with the outer par_iter for
-        // the same pool causes jwalk's own busy-pool deadlock guard to trip
-        // and abort walks early -- silently yielding 0 bytes for whichever
-        // directories lost that race, which is exactly the bug this fixes.
-        let mut results: Vec<DevDirectory> = matched
-            .par_iter()
-            .map(|m| {
-                let size: u64 = jwalk::WalkDir::new(&m.path)
-                    .skip_hidden(false)
-                    .parallelism(jwalk::Parallelism::Serial)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                    .filter_map(|e| e.metadata().ok())
-                    .map(|meta| meta.len())
-                    .sum();
-
-                DevDirectory {
-                    path: m.path.clone(),
-                    name: m.name.clone(),
-                    size,
-                    category: m.category.to_string(),
-                }
-            })
-            .collect();
-
+        let mut results: Vec<DevDirectory> = Vec::new();
+        collect_dev_dirs(&index.root, index, &mut results);
         results.sort_by(|a, b| b.size.cmp(&a.size));
         Ok(results)
     })
     .await
-    .unwrap_or_else(|_| Err("Dev directory scan failed".to_string()))
+    .unwrap_or_else(|_| Err("Dev directory lookup failed".to_string()))
 }
 
 fn main() {
@@ -1243,12 +1256,10 @@ fn main() {
             reveal_in_finder,
             move_to_trash,
             get_installed_apps,
-            uninstall_app,
-            find_orphaned_leftovers,
             check_fda_status,
             open_fda_settings,
             get_system_info,
-            find_dev_directories
+            get_dev_directories
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
