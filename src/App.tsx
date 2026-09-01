@@ -1,18 +1,18 @@
 import { usePro } from '@/hooks/usePro';
-import { useState, useEffect, useCallback, startTransition } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { TreemapViewer, type ScanNode } from '@/components/TreemapViewer'
+import { TreemapViewerMemo as TreemapViewer, type ScanNode } from '@/components/TreemapViewer'
 import { Layout } from '@/components/Layout'
-import { FileListView } from '@/components/FileListView'
-import { SmartCleanView } from '@/components/SmartCleanView'
+import { FileListViewMemo as FileListView } from '@/components/FileListView'
+import { SmartCleanViewMemo as SmartCleanView } from '@/components/SmartCleanView'
 import { SettingsView } from '@/components/SettingsView'
-import { AiCacheView } from '@/components/AiCacheView'
-import { DuplicateView, type SafeDeleteItem } from '@/components/DuplicateView'
+import { AiCacheViewMemo as AiCacheView } from '@/components/AiCacheView'
+import { DuplicateViewMemo as DuplicateView, type SafeDeleteItem } from '@/components/DuplicateView'
 import { SearchOverlay } from '@/components/SearchOverlay'
 import { FdaModal } from '@/components/FdaModal'
-import { DevCleanupView, type DevDirectory } from '@/components/DevCleanupView'
+import { DevCleanupViewMemo as DevCleanupView, type DevDirectory } from '@/components/DevCleanupView'
 import { QuickCleanView, type CombinedCleanupItem } from '@/components/QuickCleanView'
 import { SystemInfoView } from '@/components/SystemInfoView'
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
@@ -77,6 +77,20 @@ function App() {
   const [scanTarget, setScanTarget] = useState<string>('')
   const { license, setLicense } = usePro()
   const [upgradeBenefit, setUpgradeBenefit] = useState<string | null>(null)
+
+  // Stable per-benefit callbacks so the memoized tab views below (which stay
+  // mounted and only toggle visibility via CSS) don't re-render on every tab
+  // switch just because App re-rendered with a fresh inline arrow function.
+  const onUpgradeAll = useCallback(() => setUpgradeBenefit('all cleanup features'), [])
+  const onUpgradeTreemap = useCallback(() => setUpgradeBenefit('treemap actions'), [])
+  const onUpgradeQuickClean = useCallback(() => setUpgradeBenefit('one-click safe cleanup'), [])
+  const onUpgradeFinder = useCallback(() => setUpgradeBenefit('Finder reveal and file actions'), [])
+  const onUpgradeDuplicates = useCallback(() => setUpgradeBenefit('duplicate cleanup'), [])
+  const onUpgradeLargeFiles = useCallback(() => setUpgradeBenefit('large-file cleanup'), [])
+  const onUpgradeAiCache = useCallback(() => setUpgradeBenefit('AI cache cleanup'), [])
+  const onUpgradeLeftovers = useCallback(() => setUpgradeBenefit('leftover cleanup'), [])
+  const onUpgradeDevCleanup = useCallback(() => setUpgradeBenefit('developer cleanup'), [])
+  const onTabChange = useCallback((tab: string) => setActiveTab(tab), [])
 
   // Badges we get for free from the scan itself (no tab needs to be opened
   // for these to be accurate).
@@ -222,11 +236,9 @@ function App() {
   }
 
 
-  const handleStageItem = (node: ScanNode) => {
-    if (!stagedDeletes.find(n => n.path === node.path)) {
-      setStagedDeletes(prev => [...prev, node])
-    }
-  }
+  const handleStageItem = useCallback((node: ScanNode) => {
+    setStagedDeletes(prev => prev.find(n => n.path === node.path) ? prev : [...prev, node])
+  }, [])
 
   const handleRemoveStaged = (path: string) => {
     setStagedDeletes(prev => {
@@ -348,11 +360,7 @@ function App() {
       <UpdateBanner />
       <Layout
         activeTab={activeTab}
-        onTabChange={(tab) => {
-          startTransition(() => {
-            setActiveTab(tab);
-          });
-        }}
+        onTabChange={onTabChange}
         hasScanned={!!scanResult}
         tabSizes={tabSizes}
         tabsLoading={{
@@ -364,8 +372,8 @@ function App() {
         }}
         onNewScan={handleNewScan}
         isScanning={scanning}
-        
-        onUpgrade={() => setUpgradeBenefit('all cleanup features')}
+
+        onUpgrade={onUpgradeAll}
         onSearch={() => setIsSearchOpen(true)}
         onRescan={() => handleScan()}
       >
@@ -477,13 +485,13 @@ function App() {
                 </div>
                 <div className="flex-1 min-h-0">
                   {overviewView === 'map' ? (
-                    <TreemapViewer data={scanResult} onStageItem={handleStageItem} onDelete={handleSmartDelete} onUpgrade={() => setUpgradeBenefit('treemap actions')} />
+                    <TreemapViewer data={scanResult} onStageItem={handleStageItem} onDelete={handleSmartDelete} onUpgrade={onUpgradeTreemap} />
                   ) : (
                     <QuickCleanView
                       items={quickCleanItems}
                       loading={quickCleanLoading}
                       onDelete={handleSmartDelete}
-                      onUpgrade={() => setUpgradeBenefit('one-click safe cleanup')}
+                      onUpgrade={onUpgradeQuickClean}
                     />
                   )}
                 </div>
@@ -495,7 +503,7 @@ function App() {
                   <h3 className="text-xl font-semibold">Disk Explorer</h3>
                 </div>
                 <div className="flex-1 min-h-0 border border-white/5 rounded-xl overflow-hidden glass">
-                   <FileListView data={scanResult} onUpgrade={() => setUpgradeBenefit('Finder reveal and file actions')} />
+                   <FileListView data={scanResult} onUpgrade={onUpgradeFinder} />
                 </div>
               </div>
 
@@ -506,7 +514,7 @@ function App() {
                   scanResult={scanResult}
                   onDelete={handleSmartDelete}
                   deletedPaths={lastDeletedPaths}
-                  onUpgrade={() => setUpgradeBenefit('duplicate cleanup')}
+                  onUpgrade={onUpgradeDuplicates}
                   onItemsChange={setDuplicateItems}
                 />
                 </div>
@@ -522,7 +530,7 @@ function App() {
                   loading={largeFiles === null}
                   onDelete={handleSmartDelete}
                   category="Large Files"
-                  onUpgrade={() => setUpgradeBenefit('large-file cleanup')}
+                  onUpgrade={onUpgradeLargeFiles}
                 />
                 </div>
               </div>
@@ -534,7 +542,7 @@ function App() {
                   loading={aiCaches === null}
                   onDelete={handleSmartDelete}
 
-                  onUpgrade={() => setUpgradeBenefit('AI cache cleanup')}
+                  onUpgrade={onUpgradeAiCache}
                 />
                 </div>
               </div>
@@ -549,7 +557,7 @@ function App() {
                   loading={leftoverData === null}
                   onDelete={handleSmartDelete}
                   category="App Leftovers"
-                  onUpgrade={() => setUpgradeBenefit('leftover cleanup')}
+                  onUpgrade={onUpgradeLeftovers}
                 />
                 </div>
               </div>
@@ -557,7 +565,7 @@ function App() {
               {/* Dev Cleanup */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'dev_cleanup' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
-                  <DevCleanupView scanResult={scanResult} onDelete={handleSmartDelete} deletedPaths={lastDeletedPaths} onUpgrade={() => setUpgradeBenefit('developer cleanup')} onItemsChange={setDevDirectories} />
+                  <DevCleanupView scanResult={scanResult} onDelete={handleSmartDelete} deletedPaths={lastDeletedPaths} onUpgrade={onUpgradeDevCleanup} onItemsChange={setDevDirectories} />
                 </div>
               </div>
 </div>
