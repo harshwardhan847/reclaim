@@ -1,5 +1,5 @@
 import { usePro } from '@/hooks/usePro';
-import React from 'react';
+import React, { startTransition } from 'react';
 import { type ScanNode } from './TreemapViewer'
 import {
   Table,
@@ -46,11 +46,13 @@ function SmartCleanView({ title, description, items, onDelete, icon, onUpgrade }
   }, [selected, items])
 
   const toggleAll = () => {
-    if (selected.size === visibleItems.length) {
-      setSelected(new Set())
-    } else {
-      setSelected(new Set(visibleItems.map(i => i.path)))
-    }
+    startTransition(() => {
+      if (selected.size === visibleItems.length) {
+        setSelected(new Set())
+      } else {
+        setSelected(new Set(visibleItems.map(i => i.path)))
+      }
+    })
   }
 
   const toggleOne = (path: string, e?: React.MouseEvent) => {
@@ -108,26 +110,18 @@ function SmartCleanView({ title, description, items, onDelete, icon, onUpgrade }
           <span>{isPro ? 'Select All' : 'Inspect cleanup · PRO'}</span>
         </button>
 
-        <div className="flex items-center gap-2">
-          {isPro && selected.size > 0 && (
-            <Button
-              onClick={handleDeleteSelected}
-              variant="outline"
-              className="h-9 px-4 bg-transparent border-white/10 hover:bg-white/5 text-white text-sm font-bold"
-            >
-              <Trash2 size={16} className="mr-2" />
-              Delete Selected ({formatSize(selectedSize)})
-            </Button>
-          )}
-          <Button
-            onClick={isPro ? handleDeleteAll : onUpgrade}
-            disabled={isPro && items.length === 0}
-            className="h-9 px-4 bg-red-600 hover:bg-red-700 text-white text-sm font-bold shadow-lg shadow-red-900/20"
-          >
-            <Trash2 size={16} className="mr-2" />
-            {isPro ? `Clean All (${formatSize(recoverableSize)})` : 'Buy License to Clean'}
-          </Button>
-        </div>
+        <Button
+          onClick={isPro ? (selected.size > 0 ? handleDeleteSelected : handleDeleteAll) : onUpgrade}
+          disabled={isPro && items.length === 0}
+          className="h-9 px-4 bg-red-600 hover:bg-red-700 text-white text-sm font-bold shadow-lg shadow-red-900/20"
+        >
+          <Trash2 size={16} className="mr-2" />
+          {isPro
+            ? selected.size > 0
+              ? `Delete Selected (${formatSize(selectedSize)})`
+              : `Clean All (${formatSize(recoverableSize)})`
+            : 'Buy License to Clean'}
+        </Button>
       </div>
 
       {/* File List */}

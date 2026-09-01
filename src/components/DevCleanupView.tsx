@@ -1,6 +1,6 @@
 import { usePro } from '@/hooks/usePro';
 import React from 'react';
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback, startTransition } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Package, Code, Hammer, HardDrive, RefreshCw, Trash2, ChevronDown, ChevronRight, Loader2, Archive, Folder, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -35,6 +35,101 @@ const getCategoryIcon = (category: string) => {
   return <Folder className="w-5 h-5" />;
 };
 
+// Memoized leaf row: only re-renders when ITS OWN checked state (or the
+// underlying dir) actually changes, not on every selection change anywhere
+// else in the list. This is what keeps "select all" on a large scan from
+// having to re-render hundreds of unrelated rows synchronously.
+const DevDirRow = React.memo(function DevDirRow({
+  dir,
+  checked,
+  isPro,
+  onToggle,
+}: {
+  dir: DevDirectory;
+  checked: boolean;
+  isPro: boolean;
+  onToggle: (path: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 p-2 hover:bg-white/5 rounded">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={() => onToggle(dir.path)}
+        className="w-4 h-4 rounded bg-black/50 border-white/20 ml-8"
+      />
+      <div className="flex-1 min-w-0">
+        <p className="text-white text-sm truncate">{dir.name}</p>
+        <p className={`text-white/40 text-xs truncate ${!isPro ? 'blur-sm select-none' : ''}`} title={isPro ? dir.path : undefined}>
+          {dir.path}
+        </p>
+      </div>
+      <span className={`text-white/60 text-sm whitespace-nowrap ${!isPro ? 'blur-sm select-none' : ''}`}>{formatBytes(dir.size)}</span>
+    </div>
+  );
+});
+
+const CategoryGroup = React.memo(function CategoryGroup({
+  category,
+  dirs,
+  isExpanded,
+  allSelected,
+  someSelected,
+  isPro,
+  isPathSelected,
+  onToggleExpand,
+  onToggleCategory,
+  onToggleRow,
+}: {
+  category: string;
+  dirs: DevDirectory[];
+  isExpanded: boolean;
+  allSelected: boolean;
+  someSelected: boolean;
+  isPro: boolean;
+  isPathSelected: (path: string) => boolean;
+  onToggleExpand: (category: string) => void;
+  onToggleCategory: (dirs: DevDirectory[]) => void;
+  onToggleRow: (path: string) => void;
+}) {
+  const categorySize = useMemo(() => dirs.reduce((sum, d) => sum + d.size, 0), [dirs]);
+
+  return (
+    <div className="glass rounded-lg border border-white/10 overflow-hidden">
+      <div className="flex items-center p-3 hover:bg-white/5 transition-colors">
+        <button onClick={() => onToggleExpand(category)} className="p-1 mr-2 text-white/70 hover:text-white">
+          {isExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+        </button>
+        <input
+          type="checkbox"
+          checked={allSelected}
+          ref={input => {
+            if (input) input.indeterminate = !allSelected && someSelected;
+          }}
+          onChange={() => onToggleCategory(dirs)}
+          className="mr-4 w-4 h-4 rounded bg-black/50 border-white/20"
+        />
+        <div className="flex items-center gap-3 flex-1 text-white cursor-pointer" onClick={() => onToggleExpand(category)}>
+          {getCategoryIcon(category)}
+          <span className="font-semibold">{category}</span>
+          <span className="text-white/50 text-sm ml-auto">{dirs.length} items • <span className={!isPro ? 'blur-sm select-none' : ''}>{formatBytes(categorySize)}</span></span>
+        </div>
+      </div>
+
+      {isExpanded && (
+        <div className="bg-black/20 p-2 border-t border-white/5">
+          {dirs.slice(0, 200).map(dir => (
+            <DevDirRow key={dir.path} dir={dir} checked={isPathSelected(dir.path)} isPro={isPro} onToggle={onToggleRow} />
+          ))}
+          {dirs.length > 200 && (
+            <p className="text-white/40 text-xs text-center py-2">+ {dirs.length - 200} more items hidden</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
 function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewProps) {
   const [directories, setDirectories] = useState<DevDirectory[]>([]);
   const { isPro } = usePro();
@@ -68,39 +163,54 @@ function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewPro
     return groups;
   }, [directories]);
 
-  const toggleCategory = (category: string) => {
-    const newExpanded = new Set(expandedCategories);
-    if (newExpanded.has(category)) newExpanded.delete(category);
-    else newExpanded.add(category);
-    setExpandedCategories(newExpanded);
-  };
+  const toggleCategory = useCallback((category: string) => {
+    setExpandedCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  }, []);
 
-  const toggleSelectCategory = (dirs: DevDirectory[]) => {
-    const newSelected = new Set(selectedPaths);
-    const allSelected = dirs.every(d => newSelected.has(d.path));
-    
-    if (allSelected) {
-      dirs.forEach(d => newSelected.delete(d.path));
-    } else {
-      dirs.forEach(d => newSelected.add(d.path));
-    }
-    setSelectedPaths(newSelected);
-  };
+  // Wrapped in startTransition so the checkbox click itself never blocks --
+  // React can keep the UI responsive while it works through re-rendering
+  // whatever selection changed, instead of freezing the click on a big list.
+  const toggleSelectCategory = useCallback((dirs: DevDirectory[]) => {
+    if (!isPro) { onUpgrade?.(); return; }
+    startTransition(() => {
+      setSelectedPaths(prev => {
+        const next = new Set(prev);
+        const allSelected = dirs.every(d => next.has(d.path));
+        if (allSelected) dirs.forEach(d => next.delete(d.path));
+        else dirs.forEach(d => next.add(d.path));
+        return next;
+      });
+    });
+  }, [isPro, onUpgrade]);
 
-  const toggleSelectPath = (path: string) => {
-    const newSelected = new Set(selectedPaths);
-    if (newSelected.has(path)) newSelected.delete(path);
-    else newSelected.add(path);
-    setSelectedPaths(newSelected);
-  };
+  const toggleSelectPath = useCallback((path: string) => {
+    if (!isPro) { onUpgrade?.(); return; }
+    startTransition(() => {
+      setSelectedPaths(prev => {
+        const next = new Set(prev);
+        if (next.has(path)) next.delete(path);
+        else next.add(path);
+        return next;
+      });
+    });
+  }, [isPro, onUpgrade]);
 
-  const selectAll = () => {
-    if (selectedPaths.size === directories.length && directories.length > 0) {
-      setSelectedPaths(new Set());
-    } else {
-      setSelectedPaths(new Set(directories.map(d => d.path)));
-    }
-  };
+  const selectAll = useCallback(() => {
+    if (!isPro) { onUpgrade?.(); return; }
+    startTransition(() => {
+      setSelectedPaths(prev => {
+        if (prev.size === directories.length && directories.length > 0) return new Set();
+        return new Set(directories.map(d => d.path));
+      });
+    });
+  }, [isPro, onUpgrade, directories]);
+
+  const isPathSelected = useCallback((path: string) => selectedPaths.has(path), [selectedPaths]);
 
   const totalSelectedSize = useMemo(() => {
     return directories
@@ -159,9 +269,9 @@ function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewPro
           </Button>
         </div>
         <div className="text-right mr-4"><p className="text-lg font-bold text-white">{formatBytes(totalRecoverableSize)}</p><p className="text-xs text-white/45">recoverable</p></div>
-        <Button 
-          variant="destructive" 
-          size="sm" 
+        <Button
+          variant="destructive"
+          size="sm"
           onClick={isPro ? handleDelete : onUpgrade}
           disabled={isPro && selectedPaths.size === 0}
           className="gap-2 bg-red-600 hover:bg-red-700 text-white"
@@ -191,58 +301,24 @@ function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewPro
       ) : (
         <div className="flex flex-col gap-3">
           {Object.entries(grouped).map(([category, dirs]) => {
-            const categorySize = dirs.reduce((sum, d) => sum + d.size, 0);
             const isExpanded = expandedCategories.has(category);
             const allSelected = dirs.length > 0 && dirs.every(d => selectedPaths.has(d.path));
             const someSelected = dirs.some(d => selectedPaths.has(d.path));
-            
+
             return (
-              <div key={category} className="glass rounded-lg border border-white/10 overflow-hidden">
-                <div className="flex items-center p-3 hover:bg-white/5 transition-colors">
-                  <button onClick={() => toggleCategory(category)} className="p-1 mr-2 text-white/70 hover:text-white">
-                    {isExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
-                  </button>
-                  <input 
-                    type="checkbox" 
-                    checked={allSelected}
-                    ref={input => {
-                      if (input) input.indeterminate = !allSelected && someSelected;
-                    }}
-                    onChange={() => isPro ? toggleSelectCategory(dirs) : onUpgrade?.()}
-                    className="mr-4 w-4 h-4 rounded bg-black/50 border-white/20"
-                  />
-                  <div className="flex items-center gap-3 flex-1 text-white cursor-pointer" onClick={() => toggleCategory(category)}>
-                    {getCategoryIcon(category)}
-                    <span className="font-semibold">{category}</span>
-                    <span className="text-white/50 text-sm ml-auto">{dirs.length} items • <span className={!isPro ? 'blur-sm select-none' : ''}>{formatBytes(categorySize)}</span></span>
-                  </div>
-                </div>
-                
-                {isExpanded && (
-                  <div className="bg-black/20 p-2 border-t border-white/5">
-                    {dirs.slice(0, 200).map(dir => (
-                      <div key={dir.path} className="flex items-center gap-3 p-2 hover:bg-white/5 rounded">
-                        <input 
-                          type="checkbox"
-                          checked={selectedPaths.has(dir.path)}
-                          onChange={() => isPro ? toggleSelectPath(dir.path) : onUpgrade?.()}
-                          className="w-4 h-4 rounded bg-black/50 border-white/20 ml-8"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-white text-sm truncate">{dir.name}</p>
-                          <p className={`text-white/40 text-xs truncate ${!isPro ? 'blur-sm select-none' : ''}`} title={isPro ? dir.path : undefined}>
-                            {dir.path}
-                          </p>
-                        </div>
-                        <span className={`text-white/60 text-sm whitespace-nowrap ${!isPro ? 'blur-sm select-none' : ''}`}>{formatBytes(dir.size)}</span>
-                      </div>
-                    ))}
-                    {dirs.length > 200 && (
-                      <p className="text-white/40 text-xs text-center py-2">+ {dirs.length - 200} more items hidden</p>
-                    )}
-                  </div>
-                )}
-              </div>
+              <CategoryGroup
+                key={category}
+                category={category}
+                dirs={dirs}
+                isExpanded={isExpanded}
+                allSelected={allSelected}
+                someSelected={someSelected}
+                isPro={isPro}
+                isPathSelected={isPathSelected}
+                onToggleExpand={toggleCategory}
+                onToggleCategory={toggleSelectCategory}
+                onToggleRow={toggleSelectPath}
+              />
             );
           })}
         </div>

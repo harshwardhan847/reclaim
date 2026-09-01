@@ -1182,12 +1182,19 @@ async fn find_dev_directories(path: String) -> Result<Vec<DevDirectory>, String>
         }
 
         // Each matched directory's size is an independent, potentially large
-        // sequential re-walk -- runs across all cores instead of one at a time.
+        // sequential re-walk -- runs across all cores instead of one at a
+        // time. The inner walk is forced Serial: jwalk::WalkDir defaults to
+        // *also* parallelizing itself on rayon's global pool, and having
+        // every one of these inner walks compete with the outer par_iter for
+        // the same pool causes jwalk's own busy-pool deadlock guard to trip
+        // and abort walks early -- silently yielding 0 bytes for whichever
+        // directories lost that race, which is exactly the bug this fixes.
         let mut results: Vec<DevDirectory> = matched
             .par_iter()
             .map(|m| {
                 let size: u64 = jwalk::WalkDir::new(&m.path)
                     .skip_hidden(false)
+                    .parallelism(jwalk::Parallelism::Serial)
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().is_file())

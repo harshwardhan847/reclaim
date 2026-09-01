@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/table'
 import { FolderIcon, CheckCircle2, Trash2, ChevronDown, ChevronRight, Bot, LockKeyhole } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, startTransition } from 'react'
 import { Button } from '@/components/ui/button'
 
 interface AiCacheViewProps {
@@ -101,7 +101,7 @@ function AiCacheView({ items, onDelete, onUpgrade }: AiCacheViewProps) {
       group.items.forEach(i => newSelected.add(i.path))
     }
     
-    setSelected(newSelected)
+    startTransition(() => setSelected(newSelected))
   }
 
   const toggleExpand = (groupName: string, e?: React.MouseEvent) => {
@@ -113,11 +113,13 @@ function AiCacheView({ items, onDelete, onUpgrade }: AiCacheViewProps) {
   }
 
   const toggleAll = () => {
-    if (selected.size === items.length) {
-      setSelected(new Set())
-    } else {
-      setSelected(new Set(items.map(i => i.path)))
-    }
+    startTransition(() => {
+      if (selected.size === items.length) {
+        setSelected(new Set())
+      } else {
+        setSelected(new Set(items.map(i => i.path)))
+      }
+    })
   }
 
   const handleDelete = () => {

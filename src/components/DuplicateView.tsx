@@ -1,5 +1,5 @@
 import { usePro } from '@/hooks/usePro';
-import React from 'react';
+import React, { startTransition } from 'react';
 import { useState, useEffect, useMemo } from 'react'
 import { type ScanNode } from './TreemapViewer'
 import { invoke } from '@tauri-apps/api/core'
@@ -125,7 +125,7 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, onUpgrade }: 
         newSelected.add(group.paths[i])
       }
     })
-    setSelectedPaths(newSelected)
+    startTransition(() => setSelectedPaths(newSelected))
   }
 
   // Every path in a group shares that group's size, so this is a cheap
