@@ -63,7 +63,7 @@ export function Layout({
       {/* Shares the native macOS title bar; traffic-light controls stay system-owned. */}
       <header
         className="relative z-[100] flex h-8 shrink-0 items-center border-b border-white/5 bg-neutral-950/90 px-5 pl-20 py-2 backdrop-blur-xl"
-        data-tauri-drag-region="deep"
+        data-tauri-drag-region
       >
         {/* <div className="relative z-10 flex items-center gap-2 pointer-events-none">
           <span className="text-sm font-bold tracking-wider text-neutral-200">Reclaim</span>
