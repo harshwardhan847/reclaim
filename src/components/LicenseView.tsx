@@ -69,7 +69,7 @@ export function LicenseView({ onChange }: { onChange?: (state: LicenseState) => 
             <Button onClick={activate} disabled={busy || !key.trim()} className="bg-primary hover:bg-primary/90 text-white">{busy ? <Loader2 size={17} className="animate-spin" /> : 'Activate'}</Button>
           </div>
           <div className="mt-3 flex items-center justify-between text-sm">
-            <span className="text-neutral-500">One-time purchase · $19.99</span>
+            <span className="text-neutral-500">One-time purchase</span>
             <button onClick={() => invoke('open_checkout_url', { url: checkoutUrl }).catch(err => setError(String(err)))} className="text-primary hover:text-primary/80 inline-flex items-center gap-1">Buy a license <ExternalLink size={13} /></button>
           </div>
         </>

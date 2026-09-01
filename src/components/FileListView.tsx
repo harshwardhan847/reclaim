@@ -1,3 +1,4 @@
+import { usePro } from '@/hooks/usePro';
 import React from 'react';
 import type { ScanNode } from './TreemapViewer'
 import {
@@ -8,17 +9,19 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { FileIcon, FolderIcon, HardDriveIcon, ChevronRight, CornerUpLeft, Loader2, LockKeyhole } from 'lucide-react'
+import { FileIcon, FolderIcon, HardDriveIcon, ChevronRight, CornerUpLeft, Loader2, LockKeyhole, AlertTriangle } from 'lucide-react'
 import { useState, useMemo, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 
-function FileListView({ data, isPro = false, onUpgrade }: { data?: ScanNode | null; isPro?: boolean; onUpgrade?: () => void }) {
+function FileListView({ data, onUpgrade }: { data?: ScanNode | null; onUpgrade?: () => void }) {
+  const { isPro } = usePro();
   const [history, setHistory] = useState<ScanNode[]>([])
   // Directories beyond the scan's summary depth/breadth cap arrive with no
   // `children` even though they're real directories -- fetched on demand as
   // the user navigates into them, instead of shipping the whole disk tree.
   const [childrenCache, setChildrenCache] = useState<Record<string, ScanNode[]>>({})
-  const [contextNode, setContextNode] = useState<ScanNode | null>(null)
+  const [childrenErrors, setChildrenErrors] = useState<Record<string, string>>({})
+  const [contextMenu, setContextMenu] = useState<{x: number, y: number, node: ScanNode} | null>(null)
 
   // Current folder is the last item in history, or root data
   const currentFolder = history.length > 0 ? history[history.length - 1] : data
@@ -26,19 +29,32 @@ function FileListView({ data, isPro = false, onUpgrade }: { data?: ScanNode | nu
   // the preloaded list may be capped (with a synthetic "N more items" row) if
   // this folder has more than the summary tree's per-directory cap.
   const loadedChildren = currentFolder ? (childrenCache[currentFolder.path] ?? currentFolder.children) : undefined
-  const isLoading = !!currentFolder && currentFolder.isDir !== false && loadedChildren === undefined
+  const currentError = currentFolder ? childrenErrors[currentFolder.path] : undefined
+  const isLoading = !!currentFolder && currentFolder.isDir !== false && loadedChildren === undefined && !currentError
 
   useEffect(() => {
     if (!currentFolder || currentFolder.isDir === false) return
     if (childrenCache[currentFolder.path]) return
+    if (childrenErrors[currentFolder.path]) return
     let cancelled = false
     invoke<ScanNode[]>('get_children', { path: currentFolder.path })
       .then(kids => {
         if (!cancelled) setChildrenCache(prev => ({ ...prev, [currentFolder.path]: kids }))
       })
-      .catch(console.error)
+      .catch(err => {
+        if (!cancelled) setChildrenErrors(prev => ({ ...prev, [currentFolder.path]: String(err) }))
+      })
     return () => { cancelled = true }
-  }, [currentFolder, childrenCache])
+  }, [currentFolder, childrenCache, childrenErrors])
+
+  const retryCurrentFolder = () => {
+    if (!currentFolder) return
+    setChildrenErrors(prev => {
+      const next = { ...prev }
+      delete next[currentFolder.path]
+      return next
+    })
+  }
 
   const currentFiles = useMemo(() => {
     if (!loadedChildren) return []
@@ -68,10 +84,10 @@ function FileListView({ data, isPro = false, onUpgrade }: { data?: ScanNode | nu
   }
 
   const reveal = async () => {
-    if (!contextNode) return
-    if (!isPro) { onUpgrade?.(); setContextNode(null); return }
-    await invoke('reveal_in_finder', { path: contextNode.path }).catch(console.error)
-    setContextNode(null)
+    if (!contextMenu) return
+    if (!isPro) { onUpgrade?.(); setContextMenu(null); return }
+    await invoke('reveal_in_finder', { path: contextMenu.node.path }).catch(console.error)
+    setContextMenu(null)
   }
 
   return (
@@ -133,7 +149,7 @@ function FileListView({ data, isPro = false, onUpgrade }: { data?: ScanNode | nu
                 key={file.path}
                 className="group border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none"
                 onDoubleClick={() => handleDoubleClick(file)}
-                onContextMenu={(e) => { e.preventDefault(); setContextNode(file) }}
+                onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, node: file }) }}
               >
                 <TableCell>
                   <div className="flex items-center space-x-3">
@@ -166,16 +182,33 @@ function FileListView({ data, isPro = false, onUpgrade }: { data?: ScanNode | nu
           </div>
         )}
 
-        {!isLoading && currentFiles.length === 0 && (
+        {currentError && (
+          <div className="flex flex-col items-center justify-center h-48 text-red-300">
+            <AlertTriangle size={28} className="mb-3 text-red-400" />
+            <p className="font-medium">Couldn't read this folder</p>
+            <p className="text-xs text-neutral-500 mt-1 max-w-md text-center">{currentError}</p>
+            <button onClick={retryCurrentFolder} className="mt-3 px-3 py-1.5 rounded-lg text-xs bg-white/5 hover:bg-white/10 text-white transition-colors">
+              Retry
+            </button>
+          </div>
+        )}
+
+        {!isLoading && !currentError && currentFiles.length === 0 && (
           <div className="flex flex-col items-center justify-center h-48 text-neutral-500">
             <p>No items inside</p>
           </div>
         )}
+
+        {!isLoading && !currentError && currentFiles.length > 500 && (
+          <p className="text-white/40 text-xs text-center py-3">
+            + {currentFiles.length - 500} more items hidden — use search (⌘K) to find a specific file
+          </p>
+        )}
       </div>
-      {contextNode && <div className="absolute inset-0 z-30" onClick={() => setContextNode(null)} onContextMenu={e => { e.preventDefault(); setContextNode(null) }}>
-        <div className="absolute right-6 top-24 w-52 rounded-xl border border-white/10 bg-neutral-900 p-1 shadow-2xl" onClick={e => e.stopPropagation()}>
-          <p className="px-3 py-2 text-xs font-semibold text-neutral-400 truncate">{contextNode.name}</p>
-          <button onClick={reveal} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white hover:bg-white/10"><LockKeyhole size={15} className={!isPro ? 'text-amber-400' : 'text-emerald-400'} />{isPro ? 'Reveal in Finder' : 'Reveal in Finder · PRO'}</button>
+      {contextMenu && <div className="fixed inset-0 z-50" onClick={() => setContextMenu(null)} onContextMenu={e => { e.preventDefault(); setContextMenu(null) }}>
+        <div className="absolute bg-neutral-900 border border-white/10 rounded-xl shadow-2xl py-1 w-52 overflow-hidden backdrop-blur-xl" style={{ top: Math.min(contextMenu.y, window.innerHeight - 100), left: Math.min(contextMenu.x, window.innerWidth - 220) }} onClick={e => e.stopPropagation()}>
+          <p className="px-3 py-2 text-xs font-semibold text-neutral-400 truncate">{contextMenu.node.name}</p>
+          <button onClick={reveal} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-white hover:bg-white/10">{!isPro && <LockKeyhole size={15} className="text-amber-400" />}{isPro ? 'Reveal in Finder' : 'Reveal in Finder · PRO'}</button>
         </div>
       </div>}
     </div>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
-import { Trash2, Plus, ShieldCheck, Folder, RefreshCw, Download, CheckCircle2, Loader2 } from 'lucide-react'
+import { Trash2, Plus, ShieldCheck, ShieldAlert, Folder, RefreshCw, Download, CheckCircle2, Loader2, ExternalLink } from 'lucide-react'
 import { useAppUpdater } from '@/lib/useAppUpdater'
 import { LicenseView, type LicenseState } from './LicenseView'
 
@@ -9,6 +10,26 @@ export function SettingsView({ onLicenseChange }: { onLicenseChange?: (state: Li
   const [newPath, setNewPath] = useState('')
   const [currentVersion, setCurrentVersion] = useState<string>('')
   const { status, availableVersion, progress, error, checkForUpdate, installUpdate, getCurrentVersion } = useAppUpdater()
+
+  // Full Disk Access status. The onboarding modal (FdaModal) only ever
+  // appears once -- if a user skips it there's previously been no way back
+  // in short of clearing localStorage/reinstalling.
+  const [fdaGranted, setFdaGranted] = useState<boolean | null>(null)
+  const [checkingFda, setCheckingFda] = useState(false)
+
+  const checkFda = async () => {
+    setCheckingFda(true)
+    try {
+      const granted = await invoke<boolean>('check_fda_status')
+      setFdaGranted(granted)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setCheckingFda(false)
+    }
+  }
+
+  useEffect(() => { checkFda() }, [])
 
   useEffect(() => {
     const saved = localStorage.getItem('reclaim_exclusions')
@@ -66,6 +87,34 @@ export function SettingsView({ onLicenseChange }: { onLicenseChange?: (state: Li
       
       <div className="flex-1 overflow-auto p-8">
         <div className="max-w-2xl">
+          <section className="mb-8 p-5 rounded-2xl border border-white/10 bg-white/[.03]">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex gap-3">
+                <div className={`p-3 rounded-xl border ${fdaGranted ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'}`}>
+                  <ShieldAlert size={22} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Full Disk Access</h3>
+                  <p className="text-sm text-neutral-400 mt-1">Required to scan hidden system folders and find every reclaimable file.</p>
+                </div>
+              </div>
+              {fdaGranted && <CheckCircle2 className="text-emerald-400 mt-1" size={22} />}
+            </div>
+            <div className="mt-4 flex items-center gap-3">
+              {!fdaGranted && (
+                <button
+                  onClick={() => invoke('open_fda_settings').catch(console.error)}
+                  className="text-primary hover:text-primary/80 inline-flex items-center gap-1 text-sm"
+                >
+                  Open System Settings <ExternalLink size={13} />
+                </button>
+              )}
+              <Button onClick={checkFda} disabled={checkingFda} variant="outline" size="sm" className="border-white/10 text-white bg-transparent ml-auto">
+                {checkingFda ? <Loader2 size={15} className="animate-spin" /> : (fdaGranted ? 'Re-check' : 'Check Access')}
+              </Button>
+            </div>
+          </section>
+
           <LicenseView onChange={onLicenseChange} />
           <h3 className="text-lg font-semibold text-white mb-2">Software Update</h3>
           <div className="flex items-center justify-between p-4 bg-white/5 border border-white/5 rounded-xl mb-6">

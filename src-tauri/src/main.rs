@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::RwLock;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
@@ -79,9 +79,13 @@ struct ScanIndex {
     dirs: HashSet<PathBuf>,
     dir_children: HashMap<PathBuf, Vec<PathBuf>>,
     dir_sizes: HashMap<PathBuf, u64>,
+    // Precomputed once in scan_path (where ai_cache_size is derived) so
+    // get_ai_cache_files doesn't have to re-walk every path in `sizes` and
+    // redo the to_lowercase()/is_ai_cache_path match from scratch.
+    ai_cache_paths: HashSet<PathBuf>,
 }
 
-struct ScanState(Mutex<Option<ScanIndex>>);
+struct ScanState(RwLock<Option<ScanIndex>>);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -143,12 +147,25 @@ fn masked_key(key: &str) -> String {
 }
 
 fn public_license_request(endpoint: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
-    let body = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+    let body_str = serde_json::to_string(&body).map_err(|e| e.to_string())?;
     let output = Command::new("curl")
-        .args(["-fsS", "--max-time", "15", "-X", "POST", &format!("{DODO_API_BASE}{endpoint}"), "-H", "Content-Type: application/json", "-d", &body])
+        .args(["-sS", "--max-time", "15", "-X", "POST", &format!("{DODO_API_BASE}{endpoint}"), "-H", "Content-Type: application/json", "-d", &body_str])
         .output().map_err(|e| format!("Network request failed: {e}"))?;
-    if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); }
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid licensing response: {e}"))
+        
+    if !output.status.success() { 
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string()); 
+    }
+    
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Invalid licensing response: {e}"))?;
+        
+    if let Some(msg) = json.get("message").and_then(|m| m.as_str()) {
+        if json.get("code").is_some() || json.get("status").is_some() || json.get("error").is_some() {
+            return Err(msg.to_string());
+        }
+    }
+    
+    Ok(json)
 }
 
 fn current_license_state() -> LicenseState {
@@ -448,11 +465,12 @@ async fn scan_path(
         // Cheap aggregate badges computed directly from the size map -- no
         // path lists materialized, just a couple of linear scans.
         let large_files_size: u64 = sizes.values().copied().filter(|&s| s > LARGE_FILE_THRESHOLD).sum();
-        let ai_cache_size: u64 = sizes
+        let ai_cache_paths: HashSet<PathBuf> = sizes
             .iter()
             .filter(|(p, _)| is_ai_cache_path(&p.to_string_lossy().to_lowercase()))
-            .map(|(_, &s)| s)
-            .sum();
+            .map(|(p, _)| p.clone())
+            .collect();
+        let ai_cache_size: u64 = ai_cache_paths.iter().map(|p| *sizes.get(p).unwrap_or(&0)).sum();
 
         // Bounded summary tree -- this, not the full file list, is what
         // actually crosses the IPC boundary.
@@ -463,9 +481,9 @@ async fn scan_path(
         // get_ai_cache_files / get_leftover_candidates / find_duplicates /
         // search_files can all answer from memory without re-walking disk or
         // shipping the whole tree to the frontend.
-        let index = ScanIndex { sizes, dirs, dir_children, dir_sizes };
+        let index = ScanIndex { sizes, dirs, dir_children, dir_sizes, ai_cache_paths };
         let state = app_handle.state::<ScanState>();
-        *state.0.lock().map_err(|_| "Scan lock poisoned".to_string())? = Some(index);
+        *state.0.write().map_err(|_| "Scan lock poisoned".to_string())? = Some(index);
 
         Ok(ScanSummary { tree, large_files_size, ai_cache_size })
     })
@@ -473,168 +491,203 @@ async fn scan_path(
     .unwrap_or_else(|_| Err("Scan panicked".to_string()))
 }
 
+// Cap on flatter, single-level result lists (large files / AI caches /
+// leftovers). Kept below MAX_TREE_DEPTH's directory-listing cap (500) proportionally
+// higher since these lists have no hierarchy to fall back on for drill-down.
+const MAX_FLAT_RESULTS: usize = 1000;
+
 #[tauri::command]
-fn get_children(state: tauri::State<ScanState>, path: String) -> Result<Vec<ScanNode>, String> {
-    let guard = state.0.lock().map_err(|_| "Scan lock poisoned".to_string())?;
-    let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
+async fn get_children(app_handle: tauri::AppHandle, path: String) -> Result<Vec<ScanNode>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<ScanState>();
+        let guard = state.0.read().map_err(|_| "Scan lock poisoned".to_string())?;
+        let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
 
-    let p = PathBuf::from(&path);
-    let mut children: Vec<PathBuf> = index.dir_children.get(&p).cloned().unwrap_or_default();
-    children.sort_by_key(|c| std::cmp::Reverse(node_size(index, c)));
-    children.truncate(500);
+        let p = PathBuf::from(&path);
+        let mut children: Vec<PathBuf> = index.dir_children.get(&p).cloned().unwrap_or_default();
+        children.sort_by_key(|c| std::cmp::Reverse(node_size(index, c)));
+        children.truncate(500);
 
-    Ok(children
-        .into_iter()
-        .map(|c| {
-            let is_dir = index.dirs.contains(&c);
-            let size = node_size(index, &c);
-            ScanNode {
-                path: c.to_string_lossy().into_owned(),
-                name: file_name_of(&c),
-                size,
-                is_dir,
-                children: None,
-                is_aggregate: false,
-            }
-        })
-        .collect())
+        Ok(children
+            .into_iter()
+            .map(|c| {
+                let is_dir = index.dirs.contains(&c);
+                let size = node_size(index, &c);
+                ScanNode {
+                    path: c.to_string_lossy().into_owned(),
+                    name: file_name_of(&c),
+                    size,
+                    is_dir,
+                    children: None,
+                    is_aggregate: false,
+                }
+            })
+            .collect())
+    })
+    .await
+    .unwrap_or_else(|_| Err("get_children panicked".to_string()))
 }
 
 #[tauri::command]
-fn get_large_files(state: tauri::State<ScanState>, min_size: u64) -> Result<Vec<ScanNode>, String> {
-    let guard = state.0.lock().map_err(|_| "Scan lock poisoned".to_string())?;
-    let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
+async fn get_large_files(app_handle: tauri::AppHandle, min_size: u64) -> Result<Vec<ScanNode>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<ScanState>();
+        let guard = state.0.read().map_err(|_| "Scan lock poisoned".to_string())?;
+        let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
 
-    let mut results: Vec<ScanNode> = index
-        .sizes
-        .iter()
-        .filter(|(_, &size)| size > min_size)
-        .map(|(path, &size)| ScanNode {
-            path: path.to_string_lossy().into_owned(),
-            name: file_name_of(path),
-            size,
-            is_dir: false,
-            children: None,
-            is_aggregate: false,
-        })
-        .collect();
-
-    results.sort_by_key(|n| std::cmp::Reverse(n.size));
-    Ok(results)
-}
-
-#[tauri::command]
-fn get_ai_cache_files(state: tauri::State<ScanState>) -> Result<Vec<ScanNode>, String> {
-    let guard = state.0.lock().map_err(|_| "Scan lock poisoned".to_string())?;
-    let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
-
-    let mut results: Vec<ScanNode> = index
-        .sizes
-        .iter()
-        .filter(|(p, _)| is_ai_cache_path(&p.to_string_lossy().to_lowercase()))
-        .map(|(path, &size)| ScanNode {
-            path: path.to_string_lossy().into_owned(),
-            name: file_name_of(path),
-            size,
-            is_dir: false,
-            children: None,
-            is_aggregate: false,
-        })
-        .collect();
-
-    results.sort_by_key(|n| std::cmp::Reverse(n.size));
-    Ok(results)
-}
-
-#[tauri::command]
-fn get_leftover_candidates(state: tauri::State<ScanState>, installed_apps: Vec<String>) -> Result<Vec<ScanNode>, String> {
-    let guard = state.0.lock().map_err(|_| "Scan lock poisoned".to_string())?;
-    let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
-
-    let installed_lower: Vec<String> = installed_apps.iter().map(|a| a.to_lowercase()).collect();
-
-    let mut results: Vec<ScanNode> = index
-        .sizes
-        .iter()
-        .filter_map(|(path, &size)| {
-            let path_str = path.to_string_lossy();
-            let lower = path_str.to_lowercase();
-            if lower.contains("/com.apple.") {
-                return None;
-            }
-            if !path_str.contains("Library/Application Support") && !path_str.contains("Library/Caches") {
-                return None;
-            }
-            let app_name = path_str.split('/').find(|p| p.contains(".app") || p.contains("com."))?;
-            let app_lower = app_name.to_lowercase();
-            if installed_lower.iter().any(|a| a.contains(&app_lower)) {
-                return None;
-            }
-            Some(ScanNode {
-                path: path_str.into_owned(),
+        let mut results: Vec<ScanNode> = index
+            .sizes
+            .iter()
+            .filter(|(_, &size)| size > min_size)
+            .map(|(path, &size)| ScanNode {
+                path: path.to_string_lossy().into_owned(),
                 name: file_name_of(path),
                 size,
                 is_dir: false,
                 children: None,
                 is_aggregate: false,
             })
-        })
-        .collect();
+            .collect();
 
-    results.sort_by_key(|n| std::cmp::Reverse(n.size));
-    Ok(results)
+        results.sort_by_key(|n| std::cmp::Reverse(n.size));
+        results.truncate(MAX_FLAT_RESULTS);
+        Ok(results)
+    })
+    .await
+    .unwrap_or_else(|_| Err("get_large_files panicked".to_string()))
 }
 
 #[tauri::command]
-fn search_files(state: tauri::State<ScanState>, query: String, limit: usize) -> Result<Vec<ScanNode>, String> {
-    let guard = state.0.lock().map_err(|_| "Scan lock poisoned".to_string())?;
-    let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
+async fn get_ai_cache_files(app_handle: tauri::AppHandle) -> Result<Vec<ScanNode>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<ScanState>();
+        let guard = state.0.read().map_err(|_| "Scan lock poisoned".to_string())?;
+        let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
 
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
-        return Ok(vec![]);
-    }
-
-    const SCAN_CAP: usize = 5000;
-    let mut matches: Vec<ScanNode> = Vec::new();
-
-    for (path, &size) in index.sizes.iter() {
-        if matches.len() >= SCAN_CAP {
-            break;
-        }
-        let name = file_name_of(path);
-        if name.to_lowercase().contains(&q) {
-            matches.push(ScanNode {
+        // Reuses the ai_cache_paths set precomputed once in scan_path instead
+        // of re-walking every path in `sizes` and redoing to_lowercase() +
+        // is_ai_cache_path here.
+        let mut results: Vec<ScanNode> = index
+            .ai_cache_paths
+            .iter()
+            .map(|path| ScanNode {
                 path: path.to_string_lossy().into_owned(),
-                name,
-                size,
+                name: file_name_of(path),
+                size: *index.sizes.get(path).unwrap_or(&0),
                 is_dir: false,
                 children: None,
                 is_aggregate: false,
-            });
-        }
-    }
+            })
+            .collect();
 
-    for path in index.dirs.iter() {
-        if matches.len() >= SCAN_CAP {
-            break;
-        }
-        let name = file_name_of(path);
-        if name.to_lowercase().contains(&q) {
-            matches.push(ScanNode {
-                path: path.to_string_lossy().into_owned(),
-                name,
-                size: *index.dir_sizes.get(path).unwrap_or(&0),
-                is_dir: true,
-                children: None,
-                is_aggregate: false,
-            });
-        }
-    }
+        results.sort_by_key(|n| std::cmp::Reverse(n.size));
+        results.truncate(MAX_FLAT_RESULTS);
+        Ok(results)
+    })
+    .await
+    .unwrap_or_else(|_| Err("get_ai_cache_files panicked".to_string()))
+}
 
-    matches.sort_by_key(|n| std::cmp::Reverse(n.size));
-    matches.truncate(limit);
-    Ok(matches)
+#[tauri::command]
+async fn get_leftover_candidates(app_handle: tauri::AppHandle, installed_apps: Vec<String>) -> Result<Vec<ScanNode>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<ScanState>();
+        let guard = state.0.read().map_err(|_| "Scan lock poisoned".to_string())?;
+        let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
+
+        let installed_lower: Vec<String> = installed_apps.iter().map(|a| a.to_lowercase()).collect();
+
+        let mut results: Vec<ScanNode> = index
+            .sizes
+            .iter()
+            .filter_map(|(path, &size)| {
+                let path_str = path.to_string_lossy();
+                let lower = path_str.to_lowercase();
+                if lower.contains("/com.apple.") {
+                    return None;
+                }
+                if !path_str.contains("Library/Application Support") && !path_str.contains("Library/Caches") {
+                    return None;
+                }
+                let app_name = path_str.split('/').find(|p| p.contains(".app") || p.contains("com."))?;
+                let app_lower = app_name.to_lowercase();
+                if installed_lower.iter().any(|a| a.contains(&app_lower)) {
+                    return None;
+                }
+                Some(ScanNode {
+                    path: path_str.into_owned(),
+                    name: file_name_of(path),
+                    size,
+                    is_dir: false,
+                    children: None,
+                    is_aggregate: false,
+                })
+            })
+            .collect();
+
+        results.sort_by_key(|n| std::cmp::Reverse(n.size));
+        results.truncate(MAX_FLAT_RESULTS);
+        Ok(results)
+    })
+    .await
+    .unwrap_or_else(|_| Err("get_leftover_candidates panicked".to_string()))
+}
+
+#[tauri::command]
+async fn search_files(app_handle: tauri::AppHandle, query: String, limit: usize) -> Result<Vec<ScanNode>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<ScanState>();
+        let guard = state.0.read().map_err(|_| "Scan lock poisoned".to_string())?;
+        let index = guard.as_ref().ok_or_else(|| "No scan data available. Please run a scan first.".to_string())?;
+
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return Ok(vec![]);
+        }
+
+        const SCAN_CAP: usize = 5000;
+        let mut matches: Vec<ScanNode> = Vec::new();
+
+        for (path, &size) in index.sizes.iter() {
+            if matches.len() >= SCAN_CAP {
+                break;
+            }
+            let name = file_name_of(path);
+            if name.to_lowercase().contains(&q) {
+                matches.push(ScanNode {
+                    path: path.to_string_lossy().into_owned(),
+                    name,
+                    size,
+                    is_dir: false,
+                    children: None,
+                    is_aggregate: false,
+                });
+            }
+        }
+
+        for path in index.dirs.iter() {
+            if matches.len() >= SCAN_CAP {
+                break;
+            }
+            let name = file_name_of(path);
+            if name.to_lowercase().contains(&q) {
+                matches.push(ScanNode {
+                    path: path.to_string_lossy().into_owned(),
+                    name,
+                    size: *index.dir_sizes.get(path).unwrap_or(&0),
+                    is_dir: true,
+                    children: None,
+                    is_aggregate: false,
+                });
+            }
+        }
+
+        matches.sort_by_key(|n| std::cmp::Reverse(n.size));
+        matches.truncate(limit);
+        Ok(matches)
+    })
+    .await
+    .unwrap_or_else(|_| Err("search_files panicked".to_string()))
 }
 
 #[tauri::command]
@@ -647,7 +700,7 @@ async fn find_duplicates(app_handle: tauri::AppHandle, min_size: u64) -> Result<
 
         let size_groups: Vec<(u64, Vec<String>)> = {
             let state = app_handle.state::<ScanState>();
-            let guard = state.0.lock().map_err(|_| "Scan lock poisoned".to_string())?;
+            let guard = state.0.read().map_err(|_| "Scan lock poisoned".to_string())?;
             let index = match guard.as_ref() {
                 Some(idx) => idx,
                 None => return Err("No scan data available. Please run a scan first.".to_string()),
@@ -739,6 +792,11 @@ fn activate_license(key: String) -> Result<LicenseState, String> {
     }))?;
     let instance_id = response.get("id").and_then(|v| v.as_str()).map(str::to_string)
         .or_else(|| response.get("license_key_instance_id").and_then(|v| v.as_str()).map(str::to_string));
+        
+    if instance_id.is_none() {
+        return Err("Activation failed: The server response did not include a license instance ID.".into());
+    }
+    
     let stored = StoredLicense { key: key.clone(), instance_id, last_validated_at: Some(now_secs()), consecutive_failures: 0 };
     keychain_write(&stored)?;
     Ok(current_license_state())
@@ -807,19 +865,28 @@ async fn reveal_in_finder(path: String) -> Result<(), String> {
 async fn move_to_trash(paths: Vec<String>) -> Result<(), String> {
     require_license()?;
     tauri::async_runtime::spawn_blocking(move || {
+        let mut errors: Vec<String> = Vec::new();
+
         for path in paths {
             if is_protected_path(&path) {
                 let err = format!("Access Denied: '{}' is a protected macOS system path and cannot be deleted.", path);
-                eprintln!("{}", err);
-                return Err(err);
+                log::error!("{}", err);
+                errors.push(err);
+                continue;
             }
 
             if let Err(e) = trash::delete(&path) {
-                eprintln!("Failed to move to trash: {} - {}", path, e);
-                return Err(e.to_string());
+                let err = format!("Failed to move to trash: {} - {}", path, e);
+                log::error!("{}", err);
+                errors.push(err);
             }
         }
-        Ok(())
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     })
     .await
     .unwrap_or_else(|_| Err("Trash task failed".to_string()))
@@ -882,7 +949,7 @@ struct DeleteReport {
 async fn uninstall_app(app_path: String) -> Result<DeleteReport, String> {
     require_license()?;
     // Stub implementation for uninstaller
-    println!("Uninstalling app: {}", app_path);
+    log::info!("Uninstalling app: {}", app_path);
     Ok(DeleteReport {
         deleted_paths: vec![app_path],
         total_size: 0,
@@ -1000,17 +1067,44 @@ struct DevDirectory {
     category: String,
 }
 
+/// A dev directory matched during the walk, before its size has been
+/// computed. Size is filled in afterwards, in parallel (see below).
+struct MatchedDevDir {
+    path: String,
+    name: String,
+    category: &'static str,
+}
+
 #[tauri::command]
 async fn find_dev_directories(path: String) -> Result<Vec<DevDirectory>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut results = Vec::new();
+        use rayon::prelude::*;
+        use std::sync::{Arc, Mutex};
 
+        // Whether `<dir>/Cargo.toml` exists, keyed by the candidate "target"
+        // directory's parent. The pruning pass (below, in process_read_dir)
+        // and the classification pass (in the main loop) both need this for
+        // the same directories -- every "target" dir is first seen as a
+        // child during its parent's process_read_dir call, then again as the
+        // entry itself once jwalk visits it -- so we compute it once and
+        // share it via this cache instead of stat-ing Cargo.toml twice.
+        let cargo_toml_cache: Arc<Mutex<HashMap<PathBuf, bool>>> = Arc::new(Mutex::new(HashMap::new()));
+        let has_cargo_toml = |cache: &Arc<Mutex<HashMap<PathBuf, bool>>>, parent: &Path| -> bool {
+            let mut cache = cache.lock().unwrap();
+            *cache
+                .entry(parent.to_path_buf())
+                .or_insert_with(|| parent.join("Cargo.toml").exists())
+        };
+
+        let mut matched: Vec<MatchedDevDir> = Vec::new();
+
+        let cache_for_prune = cargo_toml_cache.clone();
         for entry in jwalk::WalkDir::new(&path)
             .skip_hidden(false)
-            .process_read_dir(|_depth, _path, _read_dir_state, children| {
+            .process_read_dir(move |_depth, _path, _read_dir_state, children| {
                 // Prune descent into any directory that matches one of our
                 // targets (node_modules, .venv, target, ...): the dedicated
-                // re-walk below sums its size separately, so without this
+                // sizing pass below sums its size separately, so without this
                 // every file inside it would otherwise be visited twice.
                 for child_result in children.iter_mut() {
                     if let Ok(child) = child_result {
@@ -1019,7 +1113,7 @@ async fn find_dev_directories(path: String) -> Result<Vec<DevDirectory>, String>
                         }
                         let dir_name = child.file_name().to_string_lossy().to_string();
                         let is_rust_target = dir_name == "target"
-                            && child.path().parent().map(|p| p.join("Cargo.toml").exists()).unwrap_or(false);
+                            && child.path().parent().map(|p| has_cargo_toml(&cache_for_prune, p)).unwrap_or(false);
                         let is_target = is_rust_target || DEV_DIR_TARGETS.iter().any(|(name, _)| *name == dir_name);
                         if is_target {
                             child.read_children = None;
@@ -1037,34 +1131,48 @@ async fn find_dev_directories(path: String) -> Result<Vec<DevDirectory>, String>
             let dir_name = entry.file_name().to_string_lossy().to_string();
             let dir_path_str = entry.path().to_string_lossy().to_string();
 
-            let dominated = results.iter().any(|r: &DevDirectory| dir_path_str.starts_with(&r.path));
+            let dominated = matched.iter().any(|r| dir_path_str.starts_with(&r.path));
             if dominated { continue; }
 
             let category = if dir_name == "target" {
                 entry.path().parent()
-                    .and_then(|p| if p.join("Cargo.toml").exists() { Some("Rust Targets") } else { None })
+                    .filter(|p| has_cargo_toml(&cargo_toml_cache, p))
+                    .map(|_| "Rust Targets")
             } else {
                 DEV_DIR_TARGETS.iter().find(|(name, _)| *name == dir_name).map(|(_, cat)| *cat)
             };
 
             if let Some(cat) = category {
-                let size: u64 = jwalk::WalkDir::new(entry.path())
+                matched.push(MatchedDevDir {
+                    path: dir_path_str,
+                    name: dir_name,
+                    category: cat,
+                });
+            }
+        }
+
+        // Each matched directory's size is an independent, potentially large
+        // sequential re-walk -- runs across all cores instead of one at a time.
+        let mut results: Vec<DevDirectory> = matched
+            .par_iter()
+            .map(|m| {
+                let size: u64 = jwalk::WalkDir::new(&m.path)
                     .skip_hidden(false)
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().is_file())
                     .filter_map(|e| e.metadata().ok())
-                    .map(|m| m.len())
+                    .map(|meta| meta.len())
                     .sum();
 
-                results.push(DevDirectory {
-                    path: dir_path_str,
-                    name: dir_name,
+                DevDirectory {
+                    path: m.path.clone(),
+                    name: m.name.clone(),
                     size,
-                    category: cat.to_string(),
-                });
-            }
-        }
+                    category: m.category.to_string(),
+                }
+            })
+            .collect();
 
         results.sort_by(|a, b| b.size.cmp(&a.size));
         Ok(results)
@@ -1079,7 +1187,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(ScanState(Mutex::new(None)))
+        .manage(ScanState(RwLock::new(None)))
         .invoke_handler(tauri::generate_handler![
             scan_path,
             get_children,

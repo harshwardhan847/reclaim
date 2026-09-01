@@ -1,3 +1,4 @@
+import { usePro } from '@/hooks/usePro';
 import React from 'react';
 import { type ScanNode } from './TreemapViewer'
 import { CheckCircle2, Trash2 } from 'lucide-react'
@@ -10,12 +11,12 @@ interface SmartCleanViewProps {
   items: ScanNode[]
   onDelete: (items: { path: string; size: number }[]) => void
   icon: React.ReactNode
-  isPro?: boolean
   onUpgrade?: () => void
 }
 
-function SmartCleanView({ title, description, items, onDelete, icon, isPro, onUpgrade }: SmartCleanViewProps) {
+function SmartCleanView({ title, description, items, onDelete, icon, onUpgrade }: SmartCleanViewProps) {
   // Format bytes to a readable string
+  const { isPro } = usePro();
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 B'
     const k = 1024

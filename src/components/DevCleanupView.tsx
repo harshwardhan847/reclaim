@@ -1,7 +1,8 @@
+import { usePro } from '@/hooks/usePro';
 import React from 'react';
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Package, Code, Hammer, HardDrive, RefreshCw, Trash2, ChevronDown, ChevronRight, Loader2, Archive, Folder } from "lucide-react";
+import { Package, Code, Hammer, HardDrive, RefreshCw, Trash2, ChevronDown, ChevronRight, Loader2, Archive, Folder, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Button } from "./ui/button";
 
 type DevDirectory = {
@@ -13,8 +14,8 @@ type DevDirectory = {
 
 interface DevCleanupViewProps {
   onDelete: (items: { path: string; size: number }[]) => void;
-  isPro?: boolean;
   onUpgrade?: () => void;
+  onSizeChange?: (size: number) => void;
 }
 
 const formatBytes = (bytes: number) => {
@@ -34,21 +35,25 @@ const getCategoryIcon = (category: string) => {
   return <Folder className="w-5 h-5" />;
 };
 
-function DevCleanupView({ onDelete, isPro, onUpgrade }: DevCleanupViewProps) {
+function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewProps) {
   const [directories, setDirectories] = useState<DevDirectory[]>([]);
+  const { isPro } = usePro();
   const [loading, setLoading] = useState(false);
   const [scanned, setScanned] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
 
   const handleScan = async () => {
     setLoading(true);
+    setScanError(null);
     try {
       const result = await invoke<DevDirectory[]>('find_dev_directories', { path: '/Users' });
       setDirectories(result || []);
       setScanned(true);
     } catch (error) {
       console.error("Failed to scan directories", error);
+      setScanError(String(error));
     } finally {
       setLoading(false);
     }
@@ -105,11 +110,18 @@ function DevCleanupView({ onDelete, isPro, onUpgrade }: DevCleanupViewProps) {
 
   const totalRecoverableSize = useMemo(() => directories.reduce((sum, dir) => sum + dir.size, 0), [directories]);
 
+  useEffect(() => {
+    onSizeChange?.(totalRecoverableSize);
+  }, [totalRecoverableSize, onSizeChange]);
+
   const handleDelete = () => {
+    // Don't remove items from local state here -- `onDelete` only opens a
+    // confirmation modal (see App.tsx), the actual move-to-trash happens
+    // only if the user confirms. Removing them eagerly meant a cancelled
+    // confirmation left this list silently out of sync with disk.
     const toDelete = directories.filter(d => selectedPaths.has(d.path)).map(d => ({ path: d.path, size: d.size }));
     onDelete(toDelete);
     setSelectedPaths(new Set());
-    setDirectories(directories.filter(d => !selectedPaths.has(d.path)));
   };
 
   if (!scanned && !loading) {
@@ -120,9 +132,15 @@ function DevCleanupView({ onDelete, isPro, onUpgrade }: DevCleanupViewProps) {
         <p className="text-white/70 mb-6 text-center max-w-md">
           Find and remove heavy developer directories like node_modules, target folders, and Python caches.
         </p>
+        {scanError && (
+          <div className="mb-4 flex items-center gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/20 px-4 py-2 rounded-lg max-w-md text-center">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>Scan failed: {scanError}. This can happen if Reclaim doesn't have permission to read {'/Users'} — check Full Disk Access in System Settings, then try again.</span>
+          </div>
+        )}
         <Button onClick={handleScan} className="bg-red-600 hover:bg-red-700 text-white gap-2">
           <HardDrive className="w-4 h-4" />
-          Scan /Users Directory
+          {scanError ? 'Retry Scan' : 'Scan /Users Directory'}
         </Button>
       </div>
     );
@@ -153,10 +171,22 @@ function DevCleanupView({ onDelete, isPro, onUpgrade }: DevCleanupViewProps) {
         </Button>
       </div>
 
+      {scanError && (
+        <div className="flex items-center gap-2 text-sm text-red-300 bg-red-500/10 border border-red-500/20 px-4 py-3 rounded-lg">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>Scan failed: {scanError}. Try Rescan above.</span>
+        </div>
+      )}
+
       {loading && directories.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 glass rounded-lg border border-white/10">
           <Loader2 className="w-12 h-12 animate-spin text-red-500 mb-4" />
           <p className="text-white/70">Scanning for developer directories...</p>
+        </div>
+      ) : !loading && directories.length === 0 && !scanError ? (
+        <div className="flex flex-col items-center justify-center py-20 glass rounded-lg border border-white/10 text-white/50">
+          <CheckCircle2 size={48} className="mb-4 text-green-500/50" />
+          <p className="text-lg">No heavy developer directories found!</p>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
@@ -200,7 +230,9 @@ function DevCleanupView({ onDelete, isPro, onUpgrade }: DevCleanupViewProps) {
                         />
                         <div className="flex-1 min-w-0">
                           <p className="text-white text-sm truncate">{dir.name}</p>
-                          <p className="text-white/40 text-xs">Path available with Pro</p>
+                          <p className={`text-white/40 text-xs truncate ${!isPro ? 'blur-sm select-none' : ''}`} title={isPro ? dir.path : undefined}>
+                            {dir.path}
+                          </p>
                         </div>
                         <span className={`text-white/60 text-sm whitespace-nowrap ${!isPro ? 'blur-sm select-none' : ''}`}>{formatBytes(dir.size)}</span>
                       </div>

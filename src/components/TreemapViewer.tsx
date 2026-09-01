@@ -1,8 +1,10 @@
+import { usePro } from '@/hooks/usePro';
 import React from 'react';
-import { useEffect, useRef, useState, useMemo } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as d3 from 'd3-hierarchy'
 import { scaleOrdinal } from 'd3-scale'
 import { schemeCategory10 } from 'd3-scale-chromatic'
+import { LockKeyhole } from 'lucide-react'
 
 export interface ScanNode {
   path: string
@@ -16,39 +18,23 @@ export interface ScanNode {
 function TreemapViewer({ 
   data, 
   onStageItem,
-  isPro = false,
   onUpgrade,
 }: { 
   data: ScanNode | null,
   onStageItem?: (node: ScanNode) => void,
-  isPro?: boolean,
   onUpgrade?: () => void,
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const { isPro } = usePro();
   const containerRef = useRef<HTMLDivElement>(null)
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
-  const [zoomedPath, setZoomedPath] = useState<string | null>(null)
-  
+
   // Dragging state
   const dragState = useRef<{
     isDragging: boolean,
     start: {x: number, y: number},
     node: d3.HierarchyRectangularNode<ScanNode> | null
   }>({ isDragging: false, start: {x: 0, y: 0}, node: null })
-
-  // Find the sub-node for zooming
-  const currentData = useMemo(() => {
-    if (!data) return null;
-    if (!zoomedPath || zoomedPath === data.path) return data;
-    
-    let found: ScanNode | null = null;
-    const findNode = (n: ScanNode) => {
-      if (n.path === zoomedPath) found = n;
-      if (!found && n.children) n.children.forEach(findNode);
-    };
-    findNode(data);
-    return found || data;
-  }, [data, zoomedPath]);
 
   const rafRef = useRef<number>(0)
   // Observe container size
@@ -75,7 +61,7 @@ function TreemapViewer({
 
   // Render Canvas
   useEffect(() => {
-    if (!canvasRef.current || !currentData || dimensions.width === 0 || dimensions.height === 0) return
+    if (!canvasRef.current || !data || dimensions.width === 0 || dimensions.height === 0) return
     const ctx = canvasRef.current.getContext('2d')
     if (!ctx) return
 
@@ -91,7 +77,7 @@ function TreemapViewer({
     ctx.clearRect(0, 0, width, height)
 
     // Compute layout
-    const root = d3.hierarchy(currentData)
+    const root = d3.hierarchy(data)
       .sum(d => d.size)
       .sort((a, b) => (b.value || 0) - (a.value || 0))
 
@@ -151,7 +137,7 @@ function TreemapViewer({
       }
     });
 
-  }, [currentData, dimensions]);
+  }, [data, dimensions]);
 
   // Interaction handlers
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -214,7 +200,6 @@ function TreemapViewer({
 
   const pointerRafRef = useRef<number>(0)
   const handlePointerMove = (e: React.PointerEvent) => {
-    e.persist()
     if (pointerRafRef.current) cancelAnimationFrame(pointerRafRef.current)
     pointerRafRef.current = requestAnimationFrame(() => {
       // Hover tooltip logic (only if not dragging, global listener handles drag)
@@ -274,9 +259,7 @@ function TreemapViewer({
   const handlePointerUp = () => {
     const { isDragging, node } = dragState.current;
     if (!node) return;
-    
-    // Zoom removed as per user request
-    
+
     if (!isDragging) {
       dragState.current = { isDragging: false, start: {x: 0, y: 0}, node: null };
     }
@@ -316,22 +299,7 @@ function TreemapViewer({
 
   return (
     <div className="w-full h-full flex flex-col space-y-2 relative">
-      <div className="flex justify-between items-center w-full pb-1">
-        <div>
-          {zoomedPath && data && zoomedPath !== data.path && (
-            <div className="flex items-center space-x-2 z-20 relative">
-              <button 
-                onClick={() => setZoomedPath(null)}
-                className="px-3 py-1 text-sm bg-white/10 hover:bg-white/20 rounded-lg backdrop-blur text-white transition-colors pointer-events-auto"
-              >
-                ← Back to Overview
-              </button>
-              <span className="text-sm text-white/50 truncate max-w-xl" title={zoomedPath}>
-                {zoomedPath.split('/').pop()}
-              </span>
-            </div>
-          )}
-        </div>
+      <div className="flex justify-end items-center w-full pb-1">
         <div className="text-xs font-semibold text-neutral-400 flex items-center gap-2 opacity-75">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
           Right-click any block for options, or drag to the trash cart
@@ -365,9 +333,12 @@ function TreemapViewer({
             onClick={() => setContextMenu(null)}
             onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
           >
-            <div 
+            <div
               className="absolute bg-neutral-900 border border-white/10 shadow-[0_10px_40px_rgba(0,0,0,0.8)] rounded-xl py-1 w-48 text-sm animate-in fade-in zoom-in-95 duration-100"
-              style={{ top: contextMenu.y, left: contextMenu.x }}
+              style={{
+                top: Math.max(0, Math.min(contextMenu.y, dimensions.height - 160)),
+                left: Math.max(0, Math.min(contextMenu.x, dimensions.width - 200)),
+              }}
               onClick={(e) => e.stopPropagation()}
             >
               <div className="px-3 py-2 border-b border-white/5 mb-1 bg-black/20">
@@ -388,10 +359,10 @@ function TreemapViewer({
                   }
                 }}
               >
-                {isPro ? 'Reveal in Finder' : 'Reveal in Finder · PRO 🔒'}
+                {isPro ? 'Reveal in Finder' : <span className="inline-flex items-center gap-1.5"><LockKeyhole size={13} className="text-amber-300" /> Reveal in Finder · PRO</span>}
               </button>
-              <button className="w-full text-left px-4 py-2 hover:bg-primary/20 hover:text-white transition-colors" onClick={() => { const node = contextMenu.node; setContextMenu(null); if (!isPro) { onUpgrade?.(); return } onStageItem?.(node) }}>{isPro ? 'Add to Cleanup List' : 'Add to Cleanup List · PRO 🔒'}</button>
-              <button className="w-full text-left px-4 py-2 text-red-300 hover:bg-red-500/20" onClick={async () => { const node = contextMenu.node; setContextMenu(null); if (!isPro) { onUpgrade?.(); return } const { invoke } = await import('@tauri-apps/api/core'); await invoke('move_to_trash', { paths: [node.path] }).catch(err => alert(String(err))) }}>{isPro ? 'Move to Trash' : 'Move to Trash · PRO 🔒'}</button>
+              <button className="w-full text-left px-4 py-2 hover:bg-primary/20 hover:text-white transition-colors" onClick={() => { const node = contextMenu.node; setContextMenu(null); if (!isPro) { onUpgrade?.(); return } onStageItem?.(node) }}>{isPro ? 'Add to Cleanup List' : <span className="inline-flex items-center gap-1.5"><LockKeyhole size={13} className="text-amber-300" /> Add to Cleanup List · PRO</span>}</button>
+              <button className="w-full text-left px-4 py-2 text-red-300 hover:bg-red-500/20" onClick={async () => { const node = contextMenu.node; setContextMenu(null); if (!isPro) { onUpgrade?.(); return } const { invoke } = await import('@tauri-apps/api/core'); await invoke('move_to_trash', { paths: [node.path] }).catch(err => alert(String(err))) }}>{isPro ? 'Move to Trash' : <span className="inline-flex items-center gap-1.5"><LockKeyhole size={13} className="text-amber-300" /> Move to Trash · PRO</span>}</button>
             </div>
           </div>
         )}

@@ -1,3 +1,4 @@
+import { usePro } from '@/hooks/usePro';
 import type { ReactNode } from "react";
 import { useState, useEffect } from 'react'
 import { LayoutDashboard, ListTree, List, Settings, Trash2, Copy, Code, Monitor, Bot, HardDrive, Home, FolderOpen, LockKeyhole, Search, RefreshCw } from 'lucide-react'
@@ -11,7 +12,6 @@ export function Layout({
   tabSizes,
   onNewScan,
   isScanning,
-  isPro,
   onUpgrade,
   onSearch,
   onRescan
@@ -23,11 +23,11 @@ export function Layout({
   tabSizes?: Record<string, number>;
   onNewScan?: (type: 'full' | 'home' | 'custom') => void;
   isScanning?: boolean;
-  isPro?: boolean;
   onUpgrade?: () => void;
   onSearch?: () => void;
   onRescan?: () => void;
 }) {
+  const { isPro } = usePro();
   const [sysInfo, setSysInfo] = useState<any>(null)
 
   useEffect(() => {
@@ -180,7 +180,8 @@ export function Layout({
                   active={activeTab === 'duplicates'}
                   onClick={() => onTabChange('duplicates')}
                   disabled={!hasScanned}
-                  badge={tabSizes?.duplicates ? formatSize(tabSizes.duplicates) : 'PRO'}
+                  locked={!isPro}
+                  badge={tabSizes?.duplicates ? formatSize(tabSizes.duplicates) : undefined}
                 />
                 <NavItem
                   icon={<List size={18} />}
@@ -188,7 +189,8 @@ export function Layout({
                   active={activeTab === 'large_files'}
                   onClick={() => onTabChange('large_files')}
                   disabled={!hasScanned}
-                  badge={tabSizes?.large_files ? formatSize(tabSizes.large_files) : 'PRO'}
+                  locked={!isPro}
+                  badge={tabSizes?.large_files ? formatSize(tabSizes.large_files) : undefined}
                 />
                 <NavItem
                   icon={<Bot size={18} />}
@@ -196,7 +198,8 @@ export function Layout({
                   active={activeTab === 'ai_cache'}
                   onClick={() => onTabChange('ai_cache')}
                   disabled={!hasScanned}
-                  badge={tabSizes?.ai_cache ? formatSize(tabSizes.ai_cache) : 'PRO'}
+                  locked={!isPro}
+                  badge={tabSizes?.ai_cache ? formatSize(tabSizes.ai_cache) : undefined}
                 />
                 <NavItem
                   icon={<Trash2 size={18} />}
@@ -204,7 +207,8 @@ export function Layout({
                   active={activeTab === 'leftovers'}
                   onClick={() => onTabChange('leftovers')}
                   disabled={!hasScanned}
-                  badge={tabSizes?.leftovers ? formatSize(tabSizes.leftovers) : 'PRO'}
+                  locked={!isPro}
+                  badge={tabSizes?.leftovers ? formatSize(tabSizes.leftovers) : undefined}
                 />
               </div>
             </div>
@@ -218,7 +222,8 @@ export function Layout({
                   active={activeTab === 'dev_cleanup'}
                   onClick={() => onTabChange('dev_cleanup')}
                   disabled={!hasScanned}
-                  badge={tabSizes?.dev_cleanup ? formatSize(tabSizes.dev_cleanup) : 'PRO'}
+                  locked={!isPro}
+                  badge={tabSizes?.dev_cleanup ? formatSize(tabSizes.dev_cleanup) : undefined}
                 />
                 <NavItem
                   icon={<Monitor size={18} />}
@@ -252,7 +257,8 @@ function NavItem({
   active = false,
   disabled = false,
   onClick,
-  badge
+  badge,
+  locked = false
 }: {
   icon: ReactNode;
   label: string;
@@ -260,6 +266,7 @@ function NavItem({
   disabled?: boolean;
   onClick?: () => void;
   badge?: string;
+  locked?: boolean;
 }) {
   return (
     <button
@@ -274,7 +281,11 @@ function NavItem({
         {icon}
       </div>
       <span className="font-medium text-sm flex-1">{label}</span>
-      {badge && <span className="text-[10px] font-semibold text-neutral-500 bg-white/5 px-1.5 py-0.5 rounded-md">{badge}</span>}
+      {locked ? (
+        <LockKeyhole size={13} className="text-amber-300 shrink-0" />
+      ) : (
+        badge && <span className="text-[10px] font-semibold text-neutral-500 bg-white/5 px-1.5 py-0.5 rounded-md">{badge}</span>
+      )}
     </button>
   )
 }

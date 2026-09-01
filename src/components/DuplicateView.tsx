@@ -1,16 +1,16 @@
+import { usePro } from '@/hooks/usePro';
 import React from 'react';
 import { useState, useEffect, useMemo } from 'react'
 import { type ScanNode } from './TreemapViewer'
 import { invoke } from '@tauri-apps/api/core'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { FileIcon, CheckCircle2, Trash2, Copy, Loader2, Sparkles, RefreshCw } from 'lucide-react'
+import { FileIcon, CheckCircle2, Trash2, Copy, Loader2, Sparkles, RefreshCw, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface DuplicateViewProps {
   scanResult: ScanNode | null
   onDelete: (items: { path: string; size: number }[]) => void
   onWastedSizeChange?: (size: number) => void
-  isPro?: boolean
   onUpgrade?: () => void
 }
 
@@ -21,9 +21,11 @@ interface DuplicateGroupResult {
 
 const MIN_DUPLICATE_SIZE = 1024 * 1024 // ignore files under 1MB
 
-function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgrade }: DuplicateViewProps) {
+function DuplicateView({ scanResult, onDelete, onWastedSizeChange, onUpgrade }: DuplicateViewProps) {
+  const { isPro } = usePro();
   const [loading, setLoading] = useState(false)
   const [hasRun, setHasRun] = useState(false)
+  const [scanError, setScanError] = useState<string | null>(null)
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroupResult[]>([])
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
 
@@ -40,6 +42,7 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgr
     if (!scanResult) return
     setLoading(true)
     setHasRun(true)
+    setScanError(null)
     setDuplicateGroups([])
     setSelectedPaths(new Set())
 
@@ -93,6 +96,7 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgr
       setDuplicateGroups(finalDuplicates)
     } catch (err) {
       console.error("Error finding duplicates:", err)
+      setScanError(String(err))
     } finally {
       setLoading(false)
     }
@@ -103,6 +107,7 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgr
     setDuplicateGroups([])
     setSelectedPaths(new Set())
     setHasRun(false)
+    setScanError(null)
   }, [scanResult])
 
   const toggleSelect = (path: string, e?: React.MouseEvent) => {
@@ -135,6 +140,19 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgr
 
   const handleDelete = () => {
     if (selectedPaths.size === 0) return
+
+    // Warn if every copy in a group is selected -- that deletes the file
+    // entirely rather than just trimming duplicates.
+    const groupsFullySelected = duplicateGroups.filter(
+      group => group.paths.length > 0 && group.paths.every(p => selectedPaths.has(p))
+    ).length
+    if (groupsFullySelected > 0) {
+      const proceed = window.confirm(
+        `You've selected every copy of ${groupsFullySelected} file${groupsFullySelected > 1 ? 's' : ''}, which will delete ${groupsFullySelected > 1 ? 'them' : 'it'} entirely, not just the duplicates. Continue?`
+      )
+      if (!proceed) return
+    }
+
     const items = Array.from(selectedPaths).map(path => ({ path, size: pathSizeMap.get(path) || 0 }))
     onDelete(items)
     setSelectedPaths(new Set())
@@ -180,13 +198,13 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgr
       <div className="px-6 py-3 bg-black/40 flex items-center justify-between border-b border-white/5">
         <div className="flex items-center space-x-3">
           <Button
-            onClick={handleSmartSelect}
-            disabled={duplicateGroups.length === 0 || loading}
+            onClick={isPro ? handleSmartSelect : onUpgrade}
+            disabled={isPro && (duplicateGroups.length === 0 || loading)}
             variant="outline"
             className="bg-transparent border-white/10 hover:bg-white/5 text-white"
           >
             <Sparkles size={16} className="mr-2 text-primary" />
-            Smart Select
+            {isPro ? 'Smart Select' : 'Smart Select · PRO'}
           </Button>
 
           <Button
@@ -229,14 +247,25 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgr
           </div>
         )}
 
-        {!loading && hasRun && duplicateGroups.length === 0 && (
+        {!loading && hasRun && scanError && (
+          <div className="flex flex-col items-center justify-center h-48 text-red-300">
+            <AlertTriangle size={40} className="mb-4 text-red-400" />
+            <p className="text-lg font-medium">Duplicate scan failed</p>
+            <p className="text-sm text-neutral-500 mt-2 max-w-md text-center">{scanError}</p>
+            <Button onClick={runDuplicateScan} variant="outline" className="mt-4 bg-transparent border-white/10 hover:bg-white/5 text-white">
+              <RefreshCw size={16} className="mr-2" /> Try Again
+            </Button>
+          </div>
+        )}
+
+        {!loading && hasRun && !scanError && duplicateGroups.length === 0 && (
           <div className="flex flex-col items-center justify-center h-48 text-neutral-500">
             <CheckCircle2 size={48} className="mb-4 text-green-500/50" />
             <p className="text-lg">No duplicate files found!</p>
           </div>
         )}
 
-        {!loading && duplicateGroups.length > 0 && (
+        {!loading && !scanError && duplicateGroups.length > 0 && (
           <Table>
             <TableHeader>
               <TableRow className="border-white/5 hover:bg-transparent">
@@ -264,8 +293,8 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgr
                           <FileIcon size={18} />
                         </div>
                         <div className="truncate">
-                          <p className="font-medium text-white truncate blur-sm select-none">Hidden file</p>
-                          <p className="text-xs text-neutral-600 truncate">File identity hidden for privacy</p>
+                          <p className={`font-medium text-white truncate ${!isPro ? "blur-sm select-none" : ""}`}>{isPro ? path.split("/").pop() : "Hidden file"}</p>
+                          <p className="text-xs text-neutral-600 truncate">{isPro ? path : "File identity hidden for privacy"}</p>
                         </div>
                       </div>
                     </TableCell>
@@ -286,6 +315,11 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, isPro, onUpgr
               })}
             </TableBody>
           </Table>
+        )}
+        {!loading && !scanError && duplicateGroups.length > 150 && (
+          <p className="text-white/40 text-xs text-center py-3">
+            + {duplicateGroups.length - 150} more duplicate groups hidden (still included in Smart Select and the totals above)
+          </p>
         )}
       </div>
     </div>

@@ -1,3 +1,4 @@
+import { usePro } from '@/hooks/usePro';
 import { useState, useEffect, useRef } from 'react'
 import { Search, File as FileIcon, Folder as FolderIcon, X } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
@@ -11,6 +12,7 @@ interface SearchOverlayProps {
 }
 
 export function SearchOverlay({ data, isOpen, onClose }: SearchOverlayProps) {
+  const { isPro } = usePro();
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ScanNode[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
@@ -117,8 +119,8 @@ export function SearchOverlay({ data, isOpen, onClose }: SearchOverlayProps) {
                     {node.isDir ? <FolderIcon size={18} /> : <FileIcon size={18} />}
                   </div>
                   <div className="truncate min-w-0">
-                    <p className="text-white font-medium truncate blur-sm select-none">Hidden item</p>
-                    <p className="text-xs text-neutral-600 truncate">File identity hidden for privacy</p>
+                    <p className={`text-white font-medium truncate ${!isPro ? "blur-sm select-none" : ""}`}>{isPro ? node.name : "Hidden item"}</p>
+                    <p className="text-xs text-neutral-600 truncate">{isPro ? node.path : "File identity hidden for privacy"}</p>
                   </div>
                 </div>
                 

@@ -1,3 +1,4 @@
+import { usePro } from '@/hooks/usePro';
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/core'
@@ -15,7 +16,6 @@ import { DevCleanupView } from '@/components/DevCleanupView'
 import { SystemInfoView } from '@/components/SystemInfoView'
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
 import { UpdateBanner } from '@/components/UpdateBanner'
-import { type LicenseState } from '@/components/LicenseView'
 import { UpgradeModal } from '@/components/UpgradeModal'
 import { Trash2, AlertCircle, X, HardDrive, AppWindow } from 'lucide-react'
 
@@ -41,13 +41,14 @@ function App() {
   const [isInitializing, setIsInitializing] = useState(true)
   const [isDeleting, setIsDeleting] = useState(false)
   const [scanTarget, setScanTarget] = useState<string>('/Users/harshwardhan')
-  const [license, setLicense] = useState<LicenseState | null>(null)
+  const { license, setLicense } = usePro()
   const [upgradeBenefit, setUpgradeBenefit] = useState<string | null>(null)
 
   // Badges we get for free from the scan itself (no tab needs to be opened
   // for these to be accurate).
   const [scanBadges, setScanBadges] = useState({ largeFilesSize: 0, aiCacheSize: 0 })
   const [duplicatesWastedSize, setDuplicatesWastedSize] = useState(0)
+  const [devCleanupSize, setDevCleanupSize] = useState(0)
 
   // Each of these is fetched lazily, once, the first time its tab is opened
   // -- not eagerly derived from the whole tree on every scan.
@@ -58,8 +59,7 @@ function App() {
 
   // Listen for Cmd+K globally
   useEffect(() => {
-    invoke<LicenseState>('get_license_state').then(setLicense).catch(console.error)
-    const handleKeyDown = (e: KeyboardEvent) => {
+        const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
         setIsSearchOpen(true)
@@ -232,7 +232,7 @@ function App() {
     large_files: scanBadges.largeFilesSize,
     ai_cache: scanBadges.aiCacheSize,
     leftovers: leftoverData ? leftoverData.reduce((acc, f) => acc + f.size, 0) : 0,
-    dev_cleanup: 0, // Populated by DevCleanupView
+    dev_cleanup: devCleanupSize,
   }
 
   return (
@@ -250,7 +250,7 @@ function App() {
         tabSizes={tabSizes}
         onNewScan={handleNewScan}
         isScanning={scanning}
-        isPro={!!license?.canUsePaidFeatures}
+        
         onUpgrade={() => setUpgradeBenefit('all cleanup features')}
         onSearch={() => setIsSearchOpen(true)}
         onRescan={() => handleScan()}
@@ -344,7 +344,7 @@ function App() {
                   <Button onClick={license?.canUsePaidFeatures ? () => setActiveTab('large_files') : () => setUpgradeBenefit('safe cleanup for the space you found')} className="bg-primary hover:bg-primary/90 text-white">{license?.canUsePaidFeatures ? 'Start Cleaning' : 'Upgrade to Reclaim It'}</Button>
                 </div>
                 <div className="flex-1 min-h-0">
-                  <TreemapViewer data={scanResult} onStageItem={handleStageItem} isPro={!!license?.canUsePaidFeatures} onUpgrade={() => setUpgradeBenefit('treemap actions')} />
+                  <TreemapViewer data={scanResult} onStageItem={handleStageItem} onUpgrade={() => setUpgradeBenefit('treemap actions')} />
                 </div>
               </div>
 
@@ -354,7 +354,7 @@ function App() {
                   <h3 className="text-xl font-semibold">Disk Explorer</h3>
                 </div>
                 <div className="h-full border border-white/5 rounded-xl overflow-hidden glass">
-                   <FileListView data={scanResult} isPro={!!license?.canUsePaidFeatures} onUpgrade={() => setUpgradeBenefit('Finder reveal and file actions')} />
+                   <FileListView data={scanResult} onUpgrade={() => setUpgradeBenefit('Finder reveal and file actions')} />
                 </div>
               </div>
 
@@ -364,7 +364,7 @@ function App() {
                   <DuplicateView
                   scanResult={scanResult}
                   onDelete={handleSmartDelete}
-                  isPro={!!license?.canUsePaidFeatures}
+                  
                   onUpgrade={() => setUpgradeBenefit('duplicate cleanup')}
                   onWastedSizeChange={setDuplicatesWastedSize}
                 />
@@ -379,7 +379,7 @@ function App() {
                   icon={<HardDrive size={24} />}
                   items={largeFiles ?? []}
                   onDelete={handleSmartDelete}
-                  isPro={!!license?.canUsePaidFeatures}
+                  
                   onUpgrade={() => setUpgradeBenefit('large-file cleanup')}
                 />
                 </div>
@@ -390,7 +390,7 @@ function App() {
                   <AiCacheView
                   items={aiCaches ?? []}
                   onDelete={handleSmartDelete}
-                  isPro={!!license?.canUsePaidFeatures}
+                  
                   onUpgrade={() => setUpgradeBenefit('AI cache cleanup')}
                 />
                 </div>
@@ -404,7 +404,7 @@ function App() {
                   icon={<AppWindow size={24} />}
                   items={leftoverData ?? []}
                   onDelete={handleSmartDelete}
-                  isPro={!!license?.canUsePaidFeatures}
+                  
                   onUpgrade={() => setUpgradeBenefit('leftover cleanup')}
                 />
                 </div>
@@ -413,7 +413,7 @@ function App() {
               {/* Dev Cleanup */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'dev_cleanup' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                  <DevCleanupView onDelete={handleSmartDelete} isPro={!!license?.canUsePaidFeatures} onUpgrade={() => setUpgradeBenefit('developer cleanup')} />
+                  <DevCleanupView onDelete={handleSmartDelete} onUpgrade={() => setUpgradeBenefit('developer cleanup')} onSizeChange={setDevCleanupSize} />
                 </div>
               </div>
 </div>
@@ -503,7 +503,7 @@ function App() {
                   onClick={handleConfirmDelete}
                   className="bg-red-600 hover:bg-red-700 text-white font-semibold shadow-lg shadow-red-900/50 px-6"
                 >
-                  Delete Permanently
+                  Move to Trash
                 </Button>
               </div>
             </div>
