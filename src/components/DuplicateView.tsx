@@ -7,10 +7,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { FileIcon, CheckCircle2, Trash2, Copy, Loader2, Sparkles, RefreshCw, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
+export type SafeDeleteItem = { path: string; name: string; size: number }
+
 interface DuplicateViewProps {
   scanResult: ScanNode | null
   onDelete: (items: { path: string; size: number }[]) => void
-  onWastedSizeChange?: (size: number) => void
+  onItemsChange?: (items: SafeDeleteItem[]) => void
   onUpgrade?: () => void
 }
 
@@ -21,7 +23,7 @@ interface DuplicateGroupResult {
 
 const MIN_DUPLICATE_SIZE = 1024 * 1024 // ignore files under 1MB
 
-function DuplicateView({ scanResult, onDelete, onWastedSizeChange, onUpgrade }: DuplicateViewProps) {
+function DuplicateView({ scanResult, onDelete, onItemsChange, onUpgrade }: DuplicateViewProps) {
   const { isPro } = usePro();
   const [loading, setLoading] = useState(false)
   const [hasRun, setHasRun] = useState(false)
@@ -102,12 +104,19 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, onUpgrade }: 
     }
   }
 
-  // Auto-run when scanResult changes (new disk scan or cache load)
+  // Auto-run when scanResult changes (new disk scan or cache load) -- this
+  // view stays mounted at all times (just hidden via CSS, see App.tsx), so
+  // this also feeds the combined Overview "safe to clean" list without the
+  // user ever needing to open the Duplicates tab.
   useEffect(() => {
     setDuplicateGroups([])
     setSelectedPaths(new Set())
     setHasRun(false)
     setScanError(null)
+    if (scanResult) {
+      runDuplicateScan()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanResult])
 
   const toggleSelect = (path: string, e?: React.MouseEvent) => {
@@ -163,9 +172,26 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, onUpgrade }: 
     return duplicateGroups.reduce((total, group) => total + group.size * (group.paths.length - 1), 0)
   }, [duplicateGroups])
 
+  // Everything but the first ("Original") copy in each group -- the same
+  // set Smart Select would pick -- exposed for the combined Overview list.
+  const safeToDeleteItems = useMemo<SafeDeleteItem[]>(() => {
+    const items: SafeDeleteItem[] = []
+    duplicateGroups.forEach(group => {
+      for (let i = 1; i < group.paths.length; i++) {
+        const path = group.paths[i]
+        items.push({ path, name: path.split('/').pop() || path, size: group.size })
+      }
+    })
+    return items
+  }, [duplicateGroups])
+
   useEffect(() => {
-    onWastedSizeChange?.(totalWastedSize)
-  }, [totalWastedSize, onWastedSizeChange])
+    // Skip the initial empty-array state before the first scan has actually
+    // run, so the parent can tell "still scanning" apart from "ran, found
+    // nothing" (both would otherwise look like an empty array).
+    if (!hasRun) return
+    onItemsChange?.(safeToDeleteItems)
+  }, [safeToDeleteItems, onItemsChange, hasRun])
 
   const selectedSize = useMemo(() => {
     let total = 0
@@ -177,7 +203,7 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, onUpgrade }: 
 
   return (
     <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full min-h-0">
-      <div className="p-6 border-b border-white/5 flex items-center justify-between bg-black/20">
+      <div className="p-6 border-b border-white/5 flex flex-wrap items-center justify-between gap-4 bg-black/20">
         <div className="flex items-center space-x-4">
           <div className="p-3 bg-primary/20 rounded-xl text-primary border border-primary/30">
             <Copy size={24} />
@@ -189,13 +215,13 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, onUpgrade }: 
         </div>
 
         <div className="text-right">
-          <div className="text-3xl font-extrabold text-white">
+          <div className="text-2xl sm:text-3xl font-extrabold text-white">
             {formatSize(totalWastedSize)} <span className="text-lg text-neutral-500 font-medium">wasted space</span>
           </div>
         </div>
       </div>
 
-      <div className="px-6 py-3 bg-black/40 flex items-center justify-between border-b border-white/5">
+      <div className="px-6 py-3 bg-black/40 flex flex-wrap items-center justify-between gap-3 border-b border-white/5">
         <div className="flex items-center space-x-3">
           <Button
             onClick={isPro ? handleSmartSelect : onUpgrade}

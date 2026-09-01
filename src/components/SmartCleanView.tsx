@@ -9,22 +9,28 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { CheckCircle2, Trash2, FileIcon } from 'lucide-react'
+import { CheckCircle2, Trash2, FileIcon, Loader2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { getSafetyInfo } from '@/lib/safety'
+import { SafetyBadge } from '@/components/SafetyBadge'
 
 interface SmartCleanViewProps {
   title: string
   description: string
   items: ScanNode[]
+  /** True while this category's data is still being fetched in the background after a scan -- lets us tell "still loading" apart from "genuinely empty". */
+  loading?: boolean
   onDelete: (items: { path: string; size: number }[]) => void
   icon: React.ReactNode
   onUpgrade?: () => void
+  /** Neither category is safe by nature (unlike Duplicates/AI Cache/Dev Cleanup) -- this drives the per-item safety badge. */
+  category: 'Large Files' | 'App Leftovers'
 }
 
 const ROW_CAP = 500
 
-function SmartCleanView({ title, description, items, onDelete, icon, onUpgrade }: SmartCleanViewProps) {
+function SmartCleanView({ title, description, items, loading, onDelete, icon, onUpgrade, category }: SmartCleanViewProps) {
   const { isPro } = usePro();
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
@@ -80,7 +86,7 @@ function SmartCleanView({ title, description, items, onDelete, icon, onUpgrade }
   return (
     <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full min-h-0">
       {/* Header */}
-      <div className="p-6 border-b border-white/5 flex items-center justify-between bg-black/20">
+      <div className="p-6 border-b border-white/5 flex flex-wrap items-center justify-between gap-4 bg-black/20">
         <div className="flex items-center space-x-4">
           <div className="p-3 bg-primary/20 rounded-xl text-primary border border-primary/30">
             {icon}
@@ -92,14 +98,15 @@ function SmartCleanView({ title, description, items, onDelete, icon, onUpgrade }
         </div>
 
         <div className="text-right">
-          <div className="text-3xl font-extrabold text-white">
+          <div className="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-2 justify-end">
+            {loading && <Loader2 size={20} className="animate-spin text-primary" />}
             {formatSize(recoverableSize)} <span className="text-lg text-neutral-500 font-medium">recoverable</span>
           </div>
         </div>
       </div>
 
       {/* Toolbar */}
-      <div className="px-6 py-3 bg-black/40 flex items-center justify-between border-b border-white/5">
+      <div className="px-6 py-3 bg-black/40 flex flex-wrap items-center justify-between gap-3 border-b border-white/5">
         <button
           onClick={isPro ? toggleAll : onUpgrade}
           className="flex items-center space-x-2 text-sm text-neutral-300 hover:text-white transition-colors"
@@ -126,7 +133,15 @@ function SmartCleanView({ title, description, items, onDelete, icon, onUpgrade }
 
       {/* File List */}
       <div className="overflow-auto flex-1 min-h-0 p-2 custom-scrollbar">
-        {items.length === 0 && (
+        {items.length === 0 && loading && (
+          <div className="flex flex-col gap-2 p-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-12 rounded-lg bg-white/5 animate-pulse" />
+            ))}
+          </div>
+        )}
+
+        {items.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center h-48 text-neutral-500">
             <CheckCircle2 size={48} className="mb-4 text-green-500/50" />
             <p className="text-lg">No junk found in this category!</p>
@@ -140,36 +155,43 @@ function SmartCleanView({ title, description, items, onDelete, icon, onUpgrade }
                 <TableHead className="w-12"></TableHead>
                 <TableHead className="text-muted-foreground font-medium">Name</TableHead>
                 <TableHead className="text-right text-muted-foreground font-medium">Size</TableHead>
+                <TableHead className="text-right text-muted-foreground font-medium">Safety</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visibleItems.map(item => (
-                <TableRow
-                  key={item.path}
-                  className="border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none"
-                  onClick={(e) => isPro ? toggleOne(item.path, e) : onUpgrade?.()}
-                >
-                  <TableCell className="w-12 text-center">
-                    <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${selected.has(item.path) ? 'bg-primary border-primary' : 'border-white/20'}`}>
-                      {selected.has(item.path) && <CheckCircle2 size={14} className="text-white" />}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center space-x-3">
-                      <div className="p-2 rounded-lg bg-black/40 text-primary shrink-0">
-                        <FileIcon size={18} />
+              {visibleItems.map(item => {
+                const safety = getSafetyInfo(category, { path: item.path, name: item.name })
+                return (
+                  <TableRow
+                    key={item.path}
+                    className="border-white/5 hover:bg-white/5 transition-colors cursor-pointer select-none"
+                    onClick={(e) => isPro ? toggleOne(item.path, e) : onUpgrade?.()}
+                  >
+                    <TableCell className="w-12 text-center">
+                      <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${selected.has(item.path) ? 'bg-primary border-primary' : 'border-white/20'}`}>
+                        {selected.has(item.path) && <CheckCircle2 size={14} className="text-white" />}
                       </div>
-                      <div className="min-w-0">
-                        <p className="font-medium text-white truncate max-w-md">{item.name}</p>
-                        <p className={`text-xs text-neutral-500 truncate max-w-md ${!isPro ? 'blur-sm select-none' : ''}`}>{item.path}</p>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center space-x-3">
+                        <div className="p-2 rounded-lg bg-black/40 text-primary shrink-0">
+                          <FileIcon size={18} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-medium text-white truncate max-w-40 sm:max-w-md">{item.name}</p>
+                          <p className={`text-xs text-neutral-500 truncate max-w-40 sm:max-w-md ${!isPro ? 'blur-sm select-none' : ''}`}>{item.path}</p>
+                        </div>
                       </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className={`text-right font-medium text-white whitespace-nowrap ${!isPro ? 'blur-sm select-none' : ''}`}>
-                    {formatSize(item.size)}
-                  </TableCell>
-                </TableRow>
-              ))}
+                    </TableCell>
+                    <TableCell className={`text-right font-medium text-white whitespace-nowrap ${!isPro ? 'blur-sm select-none' : ''}`}>
+                      {formatSize(item.size)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <SafetyBadge info={safety} />
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         )}

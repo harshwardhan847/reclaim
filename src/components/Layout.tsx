@@ -1,7 +1,7 @@
 import { usePro } from '@/hooks/usePro';
 import type { ReactNode } from "react";
 import { useState, useEffect } from 'react'
-import { LayoutDashboard, ListTree, List, Settings, Trash2, Copy, Code, Monitor, Bot, HardDrive, Home, FolderOpen, LockKeyhole, Search, RefreshCw } from 'lucide-react'
+import { LayoutDashboard, ListTree, List, Settings, Trash2, Copy, Code, Monitor, Bot, HardDrive, Home, FolderOpen, LockKeyhole, Search, RefreshCw, Loader2 } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 
 export function Layout({
@@ -10,6 +10,7 @@ export function Layout({
   onTabChange,
   hasScanned,
   tabSizes,
+  tabsLoading,
   onNewScan,
   isScanning,
   onUpgrade,
@@ -21,6 +22,8 @@ export function Layout({
   onTabChange: (tab: string) => void;
   hasScanned: boolean;
   tabSizes?: Record<string, number>;
+  /** Which tabs are still being scanned/fetched in the background after a scan -- shows a spinner instead of a stale/empty badge. */
+  tabsLoading?: Record<string, boolean>;
   onNewScan?: (type: 'full' | 'home' | 'custom') => void;
   isScanning?: boolean;
   onUpgrade?: () => void;
@@ -69,25 +72,25 @@ export function Layout({
         <button
           type="button"
           onClick={onSearch}
-          className="absolute left-1/2 z-10 flex h-8 w-80 -translate-x-1/2 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 text-left text-sm text-neutral-500 transition-colors hover:border-white/20 hover:bg-white/[.08]"
+          className="z-10 mx-auto flex h-8 w-full min-w-0 max-w-80 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 text-left text-sm text-neutral-500 transition-colors hover:border-white/20 hover:bg-white/[.08]"
           data-tauri-drag-region="false"
           data-titlebar-action="true"
         >
-          <Search size={14} />
-          <span className="flex-1">Search files...</span>
-          <kbd className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-neutral-400">⌘K</kbd>
+          <Search size={14} className="shrink-0" />
+          <span className="flex-1 truncate">Search files...</span>
+          <kbd className="hidden shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-neutral-400 sm:inline-block">⌘K</kbd>
         </button>
 
-        <div className="relative z-10 ml-auto flex items-center gap-1" data-tauri-drag-region="false">
-          {hasScanned && <button type="button" onClick={onRescan} title="Rescan drive" data-titlebar-action="true" className="mr-2 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-neutral-400 hover:bg-white/10 hover:text-white"><RefreshCw size={13} className={isScanning ? 'animate-spin text-primary' : ''} />Rescan</button>}
-          {!isPro && <button type="button" onClick={onUpgrade} data-titlebar-action="true" className="rounded-full bg-amber-500 px-4 py-1 text-xs font-bold text-white shadow-lg shadow-amber-500/20 transition-colors hover:bg-amber-400">Upgrade to Pro</button>}
-          {isPro && <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-xs font-bold text-emerald-300">PRO · Active</span>}
+        <div className="z-10 flex shrink-0 items-center gap-1" data-tauri-drag-region="false">
+          {hasScanned && <button type="button" onClick={onRescan} title="Rescan drive" data-titlebar-action="true" className="mr-2 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-neutral-400 hover:bg-white/10 hover:text-white"><RefreshCw size={13} className={isScanning ? 'animate-spin text-primary' : ''} /><span className="hidden sm:inline">Rescan</span></button>}
+          {!isPro && <button type="button" onClick={onUpgrade} data-titlebar-action="true" className="whitespace-nowrap rounded-full bg-amber-500 px-4 py-1 text-xs font-bold text-white shadow-lg shadow-amber-500/20 transition-colors hover:bg-amber-400">Upgrade to Pro</button>}
+          {isPro && <span className="whitespace-nowrap rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-xs font-bold text-emerald-300">PRO · Active</span>}
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
         {/* Sidebar */}
-        <aside className="w-64 h-full glass border-r border-white/5 flex flex-col relative z-10">
+        <aside className="w-56 lg:w-64 h-full shrink-0 glass border-r border-white/5 flex flex-col relative z-10">
           <nav className="flex-1 px-4 py-4 overflow-y-auto custom-scrollbar relative z-20 pointer-events-auto">
             <div className="mb-6 px-3">
               <div className="space-y-2">
@@ -181,6 +184,7 @@ export function Layout({
                   onClick={() => onTabChange('duplicates')}
                   disabled={!hasScanned}
                   locked={!isPro}
+                  loading={hasScanned && tabsLoading?.duplicates}
                   badge={tabSizes?.duplicates ? formatSize(tabSizes.duplicates) : undefined}
                 />
                 <NavItem
@@ -190,6 +194,7 @@ export function Layout({
                   onClick={() => onTabChange('large_files')}
                   disabled={!hasScanned}
                   locked={!isPro}
+                  loading={hasScanned && tabsLoading?.large_files}
                   badge={tabSizes?.large_files ? formatSize(tabSizes.large_files) : undefined}
                 />
                 <NavItem
@@ -199,6 +204,7 @@ export function Layout({
                   onClick={() => onTabChange('ai_cache')}
                   disabled={!hasScanned}
                   locked={!isPro}
+                  loading={hasScanned && tabsLoading?.ai_cache}
                   badge={tabSizes?.ai_cache ? formatSize(tabSizes.ai_cache) : undefined}
                 />
                 <NavItem
@@ -208,6 +214,7 @@ export function Layout({
                   onClick={() => onTabChange('leftovers')}
                   disabled={!hasScanned}
                   locked={!isPro}
+                  loading={hasScanned && tabsLoading?.leftovers}
                   badge={tabSizes?.leftovers ? formatSize(tabSizes.leftovers) : undefined}
                 />
               </div>
@@ -223,6 +230,7 @@ export function Layout({
                   onClick={() => onTabChange('dev_cleanup')}
                   disabled={!hasScanned}
                   locked={!isPro}
+                  loading={hasScanned && tabsLoading?.dev_cleanup}
                   badge={tabSizes?.dev_cleanup ? formatSize(tabSizes.dev_cleanup) : undefined}
                 />
                 <NavItem
@@ -242,7 +250,7 @@ export function Layout({
 
         {/* Main Content */}
         <main className="flex-1 flex flex-col relative z-10 h-full min-h-0 overflow-hidden">
-          <div className="flex-1 min-h-0 overflow-y-auto p-8 relative z-0">
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 lg:p-8 relative z-0">
             {children}
           </div>
         </main>
@@ -258,7 +266,8 @@ function NavItem({
   disabled = false,
   onClick,
   badge,
-  locked = false
+  locked = false,
+  loading = false
 }: {
   icon: ReactNode;
   label: string;
@@ -267,6 +276,7 @@ function NavItem({
   onClick?: () => void;
   badge?: string;
   locked?: boolean;
+  loading?: boolean;
 }) {
   return (
     <button
@@ -281,7 +291,11 @@ function NavItem({
         {icon}
       </div>
       <span className="font-medium text-sm flex-1">{label}</span>
-      {locked ? (
+      {loading ? (
+        <span title="Still scanning in the background" className="shrink-0">
+          <Loader2 size={13} className="animate-spin text-neutral-500" />
+        </span>
+      ) : locked ? (
         <LockKeyhole size={13} className="text-amber-300 shrink-0" />
       ) : (
         badge && <span className="text-[10px] font-semibold text-neutral-500 bg-white/5 px-1.5 py-0.5 rounded-md">{badge}</span>

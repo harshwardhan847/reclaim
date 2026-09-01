@@ -8,13 +8,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { FolderIcon, CheckCircle2, Trash2, ChevronDown, ChevronRight, Bot, LockKeyhole } from 'lucide-react'
+import { FolderIcon, CheckCircle2, Trash2, ChevronDown, ChevronRight, Bot, LockKeyhole, Loader2 } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import React, { useState, useMemo, startTransition } from 'react'
 import { Button } from '@/components/ui/button'
 
 interface AiCacheViewProps {
   items: ScanNode[]
+  /** True while this data is still being fetched in the background after a scan -- lets us tell "still loading" apart from "genuinely empty". */
+  loading?: boolean
   onDelete: (items: { path: string; size: number }[]) => void
   onUpgrade?: () => void
 }
@@ -25,7 +27,7 @@ type AgentGroup = {
   totalSize: number
 }
 
-function AiCacheView({ items, onDelete, onUpgrade }: AiCacheViewProps) {
+function AiCacheView({ items, loading, onDelete, onUpgrade }: AiCacheViewProps) {
   const { isPro } = usePro();
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<{x: number, y: number, item: ScanNode} | null>(null)
@@ -138,7 +140,7 @@ function AiCacheView({ items, onDelete, onUpgrade }: AiCacheViewProps) {
   return (
     <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full min-h-0">
       {/* Header */}
-      <div className="p-6 border-b border-white/5 flex items-center justify-between bg-black/20">
+      <div className="p-6 border-b border-white/5 flex flex-wrap items-center justify-between gap-4 bg-black/20">
         <div className="flex items-center space-x-4">
           <div className="p-3 bg-primary/20 rounded-xl text-primary border border-primary/30">
             <Bot size={24} />
@@ -150,14 +152,15 @@ function AiCacheView({ items, onDelete, onUpgrade }: AiCacheViewProps) {
         </div>
         
         <div className="text-right">
-          <div className="text-3xl font-extrabold text-white">
+          <div className="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-2 justify-end">
+            {loading && <Loader2 size={20} className="animate-spin text-primary" />}
             {formatSize(totalRecoverable)} <span className="text-lg text-neutral-500 font-medium">recoverable</span>
           </div>
         </div>
       </div>
       
       {/* Toolbar */}
-      <div className="px-6 py-3 bg-black/40 flex items-center justify-between border-b border-white/5">
+      <div className="px-6 py-3 bg-black/40 flex flex-wrap items-center justify-between gap-3 border-b border-white/5">
         <button
           onClick={isPro ? toggleAll : onUpgrade}
           className="flex items-center space-x-2 text-sm text-neutral-300 hover:text-white transition-colors"
@@ -180,7 +183,15 @@ function AiCacheView({ items, onDelete, onUpgrade }: AiCacheViewProps) {
       
       {/* File List */}
       <div className="overflow-auto flex-1 min-h-0 p-2 custom-scrollbar">
-        {groups.length === 0 && (
+        {groups.length === 0 && loading && (
+          <div className="flex flex-col gap-2 p-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-12 rounded-lg bg-white/5 animate-pulse" />
+            ))}
+          </div>
+        )}
+
+        {groups.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center h-48 text-neutral-500">
             <CheckCircle2 size={48} className="mb-4 text-green-500/50" />
             <p className="text-lg">No AI junk found!</p>

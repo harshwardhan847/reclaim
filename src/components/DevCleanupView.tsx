@@ -4,8 +4,9 @@ import { useState, useMemo, useEffect, useCallback, startTransition } from "reac
 import { invoke } from "@tauri-apps/api/core";
 import { Package, Code, Hammer, HardDrive, RefreshCw, Trash2, ChevronDown, ChevronRight, Loader2, Archive, Folder, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Button } from "./ui/button";
+import type { ScanNode } from "./TreemapViewer";
 
-type DevDirectory = {
+export type DevDirectory = {
   path: string;
   name: string;
   size: number;
@@ -13,9 +14,10 @@ type DevDirectory = {
 };
 
 interface DevCleanupViewProps {
+  scanResult: ScanNode | null;
   onDelete: (items: { path: string; size: number }[]) => void;
   onUpgrade?: () => void;
-  onSizeChange?: (size: number) => void;
+  onItemsChange?: (items: DevDirectory[]) => void;
 }
 
 const formatBytes = (bytes: number) => {
@@ -130,7 +132,7 @@ const CategoryGroup = React.memo(function CategoryGroup({
   );
 });
 
-function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewProps) {
+function DevCleanupView({ scanResult, onDelete, onUpgrade, onItemsChange }: DevCleanupViewProps) {
   const [directories, setDirectories] = useState<DevDirectory[]>([]);
   const { isPro } = usePro();
   const [loading, setLoading] = useState(false);
@@ -153,6 +155,21 @@ function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewPro
       setLoading(false);
     }
   };
+
+  // Runs automatically the moment a scan exists (this view stays mounted at
+  // all times, just hidden via CSS -- see App.tsx) so both this tab and the
+  // combined Overview "safe to clean" list have data without the user ever
+  // needing to open Dev Cleanup manually.
+  useEffect(() => {
+    setDirectories([]);
+    setSelectedPaths(new Set());
+    setScanned(false);
+    setScanError(null);
+    if (scanResult) {
+      handleScan();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanResult]);
 
   const grouped = useMemo(() => {
     const groups: Record<string, DevDirectory[]> = {};
@@ -221,8 +238,11 @@ function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewPro
   const totalRecoverableSize = useMemo(() => directories.reduce((sum, dir) => sum + dir.size, 0), [directories]);
 
   useEffect(() => {
-    onSizeChange?.(totalRecoverableSize);
-  }, [totalRecoverableSize, onSizeChange]);
+    // Skip until the first scan has actually completed, so the parent can
+    // tell "still scanning" apart from "ran, found nothing".
+    if (!scanned) return;
+    onItemsChange?.(directories);
+  }, [directories, onItemsChange, scanned]);
 
   const handleDelete = () => {
     // Don't remove items from local state here -- `onDelete` only opens a
@@ -234,6 +254,9 @@ function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewPro
     setSelectedPaths(new Set());
   };
 
+  // Dev cleanup now runs automatically as soon as a scan exists (see the
+  // effect above) -- this only shows if the auto-run hasn't started yet
+  // (first paint) or if it failed outright before ever producing a result.
   if (!scanned && !loading) {
     return (
       <div className="flex flex-col items-center justify-center p-12 glass rounded-lg border border-white/10">
@@ -258,7 +281,7 @@ function DevCleanupView({ onDelete, onUpgrade, onSizeChange }: DevCleanupViewPro
 
   return (
       <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between glass p-4 rounded-lg border border-white/10">
+      <div className="flex flex-wrap items-center justify-between gap-3 glass p-4 rounded-lg border border-white/10">
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={isPro ? selectAll : onUpgrade} className="border-white/20 text-white hover:bg-white/10">
             {isPro ? (selectedPaths.size === directories.length && directories.length > 0 ? "Deselect All" : "Select All") : 'Select cleanup · PRO'}

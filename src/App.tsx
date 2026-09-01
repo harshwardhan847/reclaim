@@ -1,5 +1,5 @@
 import { usePro } from '@/hooks/usePro';
-import { useState, useEffect, useCallback, useRef, startTransition } from 'react'
+import { useState, useEffect, useCallback, startTransition } from 'react'
 import { Button } from '@/components/ui/button'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -9,15 +9,16 @@ import { FileListView } from '@/components/FileListView'
 import { SmartCleanView } from '@/components/SmartCleanView'
 import { SettingsView } from '@/components/SettingsView'
 import { AiCacheView } from '@/components/AiCacheView'
-import { DuplicateView } from '@/components/DuplicateView'
+import { DuplicateView, type SafeDeleteItem } from '@/components/DuplicateView'
 import { SearchOverlay } from '@/components/SearchOverlay'
 import { FdaModal } from '@/components/FdaModal'
-import { DevCleanupView } from '@/components/DevCleanupView'
+import { DevCleanupView, type DevDirectory } from '@/components/DevCleanupView'
+import { QuickCleanView, type CombinedCleanupItem } from '@/components/QuickCleanView'
 import { SystemInfoView } from '@/components/SystemInfoView'
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UpgradeModal } from '@/components/UpgradeModal'
-import { Trash2, AlertCircle, X, HardDrive, AppWindow } from 'lucide-react'
+import { Trash2, AlertCircle, X, HardDrive, AppWindow, Map as MapIcon, Sparkles } from 'lucide-react'
 
 interface ScanSummary {
   tree: ScanNode
@@ -47,15 +48,19 @@ function App() {
   // Badges we get for free from the scan itself (no tab needs to be opened
   // for these to be accurate).
   const [scanBadges, setScanBadges] = useState({ largeFilesSize: 0, aiCacheSize: 0 })
-  const [duplicatesWastedSize, setDuplicatesWastedSize] = useState(0)
-  const [devCleanupSize, setDevCleanupSize] = useState(0)
+  const [overviewView, setOverviewView] = useState<'map' | 'clean'>('map')
 
-  // Each of these is fetched lazily, once, the first time its tab is opened
-  // -- not eagerly derived from the whole tree on every scan.
+  // Every one of these starts `null` (meaning "not fetched/scanned yet, for
+  // this scan") and is fetched eagerly as soon as a scan completes -- not
+  // lazily per-tab -- so the combined Quick Clean list in Overview has data
+  // without the user needing to open every individual tab first. `null` vs
+  // `[]` matters: it's how we tell "still scanning" apart from "ran, found
+  // nothing".
   const [largeFiles, setLargeFiles] = useState<ScanNode[] | null>(null)
   const [aiCaches, setAiCaches] = useState<ScanNode[] | null>(null)
   const [leftoverData, setLeftoverData] = useState<ScanNode[] | null>(null)
-  const fetchedTabs = useRef<Set<string>>(new Set())
+  const [duplicateItems, setDuplicateItems] = useState<SafeDeleteItem[] | null>(null)
+  const [devDirectories, setDevDirectories] = useState<DevDirectory[] | null>(null)
 
   // Listen for Cmd+K globally
   useEffect(() => {
@@ -86,31 +91,28 @@ function App() {
     }
   }, [])
 
-  // Fetch whichever smart-clean list the active tab needs, once, the first
-  // time it's opened after a scan. Everything here reads from the scan
-  // index Rust already cached server-side -- no re-walk, no flattening a
-  // multi-million-node tree in JS.
+  // Fetch every smart-clean list eagerly as soon as a scan completes -- not
+  // lazily per-tab -- so the combined Quick Clean list in Overview (and
+  // every individual tab) has data immediately, without the user needing to
+  // open each tab first. These three read from the scan index Rust already
+  // cached server-side (no re-walk, no flattening a multi-million-node tree
+  // in JS), so they're cheap; duplicates/dev-cleanup run their own real
+  // walks and self-trigger from within DuplicateView/DevCleanupView instead.
   useEffect(() => {
     if (!scanResult) return
-    if (fetchedTabs.current.has(activeTab)) return
 
-    if (activeTab === 'large_files') {
-      fetchedTabs.current.add(activeTab)
-      invoke<ScanNode[]>('get_large_files', { minSize: LARGE_FILE_MIN_SIZE })
-        .then(setLargeFiles)
-        .catch(console.error)
-    } else if (activeTab === 'ai_cache') {
-      fetchedTabs.current.add(activeTab)
-      invoke<ScanNode[]>('get_ai_cache_files')
-        .then(setAiCaches)
-        .catch(console.error)
-    } else if (activeTab === 'leftovers' && installedAppsLoaded) {
-      fetchedTabs.current.add(activeTab)
+    invoke<ScanNode[]>('get_large_files', { minSize: LARGE_FILE_MIN_SIZE })
+      .then(setLargeFiles)
+      .catch(console.error)
+    invoke<ScanNode[]>('get_ai_cache_files')
+      .then(setAiCaches)
+      .catch(console.error)
+    if (installedAppsLoaded) {
       invoke<ScanNode[]>('get_leftover_candidates', { installedApps })
         .then(setLeftoverData)
         .catch(console.error)
     }
-  }, [activeTab, scanResult, installedApps, installedAppsLoaded])
+  }, [scanResult, installedApps, installedAppsLoaded])
 
   const handleScan = async (overrideTarget?: string) => {
     if (scanning) return;
@@ -119,11 +121,11 @@ function App() {
     setScannedBytes(0)
 
     // A new scan invalidates every previously fetched/derived view.
-    fetchedTabs.current = new Set()
     setLargeFiles(null)
     setAiCaches(null)
     setLeftoverData(null)
-    setDuplicatesWastedSize(0)
+    setDuplicateItems(null)
+    setDevDirectories(null)
     setScanBadges({ largeFilesSize: 0, aiCacheSize: 0 })
 
     const targetPath = overrideTarget || scanTarget;
@@ -228,12 +230,27 @@ function App() {
   const formattedStagedSize = (totalStagedSize / 1e9).toFixed(2) + ' GB'
 
   const tabSizes = {
-    duplicates: duplicatesWastedSize,
+    duplicates: duplicateItems ? duplicateItems.reduce((acc, i) => acc + i.size, 0) : 0,
     large_files: scanBadges.largeFilesSize,
     ai_cache: scanBadges.aiCacheSize,
     leftovers: leftoverData ? leftoverData.reduce((acc, f) => acc + f.size, 0) : 0,
-    dev_cleanup: devCleanupSize,
+    dev_cleanup: devDirectories ? devDirectories.reduce((acc, d) => acc + d.size, 0) : 0,
   }
+
+  // Quick Clean only ever shows categories that are safe to delete by their
+  // very nature, with no judgment call required: duplicate copies (the
+  // original is always kept), tool/model caches (they just regenerate), and
+  // dev build artifacts (rebuilt on your next `npm install`/`cargo build`).
+  // Large Files and App Leftovers are deliberately left out -- there's no
+  // way to know if a given large file or leftover folder is safe without a
+  // human looking at it, so those stay in their own tabs with a per-item
+  // safety badge instead of being offered as a one-click "clean everything".
+  const quickCleanLoading = aiCaches === null || duplicateItems === null || devDirectories === null
+  const quickCleanItems: CombinedCleanupItem[] = [
+    ...(duplicateItems ?? []).map(i => ({ path: i.path, name: i.name, size: i.size, category: 'Duplicates' as const })),
+    ...(aiCaches ?? []).map(n => ({ path: n.path, name: n.name, size: n.size, category: 'AI Cache' as const })),
+    ...(devDirectories ?? []).map(d => ({ path: d.path, name: d.name, size: d.size, category: 'Dev Cleanup' as const, devCategory: d.category })),
+  ]
 
   return (
     <>
@@ -248,6 +265,13 @@ function App() {
         }}
         hasScanned={!!scanResult}
         tabSizes={tabSizes}
+        tabsLoading={{
+          duplicates: duplicateItems === null,
+          large_files: largeFiles === null,
+          ai_cache: aiCaches === null,
+          leftovers: leftoverData === null,
+          dev_cleanup: devDirectories === null,
+        }}
         onNewScan={handleNewScan}
         isScanning={scanning}
         
@@ -339,12 +363,39 @@ function App() {
 
               {/* Treemap View */}
               <div className={`flex-1 flex flex-col min-h-0 ${activeTab === 'overview' ? 'flex' : 'hidden'}`}>
-                <div className="mx-1 mb-3 flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
-                  <div><p className="text-sm font-semibold text-white">{(Object.values(tabSizes).reduce((sum, size) => sum + size, 0) / 1e9).toFixed(2)} GB can be reclaimed</p><p className="text-xs text-neutral-500">Caches, large files, leftovers and developer artifacts found in this scan.</p></div>
-                  <Button onClick={license?.canUsePaidFeatures ? () => setActiveTab('large_files') : () => setUpgradeBenefit('safe cleanup for the space you found')} className="bg-primary hover:bg-primary/90 text-white">{license?.canUsePaidFeatures ? 'Start Cleaning' : 'Upgrade to Reclaim It'}</Button>
+                <div className="mx-1 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+                  <div><p className="text-sm font-semibold text-white">{(Object.values(tabSizes).reduce((sum, size) => sum + size, 0) / 1e9).toFixed(2)} GB can be reclaimed</p><p className="hidden text-xs text-neutral-500 sm:block">Caches, large files, leftovers and developer artifacts found in this scan.</p></div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-black/30 p-1">
+                      <button
+                        onClick={() => setOverviewView('map')}
+                        className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${overviewView === 'map' ? 'bg-white/10 text-white' : 'text-neutral-500 hover:text-white'}`}
+                      >
+                        <MapIcon size={13} /> Space Map
+                      </button>
+                      <button
+                        onClick={() => setOverviewView('clean')}
+                        className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${overviewView === 'clean' ? 'bg-white/10 text-white' : 'text-neutral-500 hover:text-white'}`}
+                      >
+                        <Sparkles size={13} /> Quick Clean
+                      </button>
+                    </div>
+                    {overviewView === 'map' && (
+                      <Button onClick={license?.canUsePaidFeatures ? () => setActiveTab('large_files') : () => setUpgradeBenefit('safe cleanup for the space you found')} className="bg-primary hover:bg-primary/90 text-white">{license?.canUsePaidFeatures ? 'Start Cleaning' : 'Upgrade to Reclaim It'}</Button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex-1 min-h-0">
-                  <TreemapViewer data={scanResult} onStageItem={handleStageItem} onUpgrade={() => setUpgradeBenefit('treemap actions')} />
+                  {overviewView === 'map' ? (
+                    <TreemapViewer data={scanResult} onStageItem={handleStageItem} onUpgrade={() => setUpgradeBenefit('treemap actions')} />
+                  ) : (
+                    <QuickCleanView
+                      items={quickCleanItems}
+                      loading={quickCleanLoading}
+                      onDelete={handleSmartDelete}
+                      onUpgrade={() => setUpgradeBenefit('one-click safe cleanup')}
+                    />
+                  )}
                 </div>
               </div>
 
@@ -364,9 +415,9 @@ function App() {
                   <DuplicateView
                   scanResult={scanResult}
                   onDelete={handleSmartDelete}
-                  
+
                   onUpgrade={() => setUpgradeBenefit('duplicate cleanup')}
-                  onWastedSizeChange={setDuplicatesWastedSize}
+                  onItemsChange={setDuplicateItems}
                 />
                 </div>
               </div>
@@ -378,8 +429,9 @@ function App() {
                   description="Files larger than 100MB taking up significant space."
                   icon={<HardDrive size={24} />}
                   items={largeFiles ?? []}
+                  loading={largeFiles === null}
                   onDelete={handleSmartDelete}
-                  
+                  category="Large Files"
                   onUpgrade={() => setUpgradeBenefit('large-file cleanup')}
                 />
                 </div>
@@ -389,8 +441,9 @@ function App() {
                 <div className="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
                   <AiCacheView
                   items={aiCaches ?? []}
+                  loading={aiCaches === null}
                   onDelete={handleSmartDelete}
-                  
+
                   onUpgrade={() => setUpgradeBenefit('AI cache cleanup')}
                 />
                 </div>
@@ -403,8 +456,9 @@ function App() {
                   description="Data from applications you no longer have installed."
                   icon={<AppWindow size={24} />}
                   items={leftoverData ?? []}
+                  loading={leftoverData === null}
                   onDelete={handleSmartDelete}
-                  
+                  category="App Leftovers"
                   onUpgrade={() => setUpgradeBenefit('leftover cleanup')}
                 />
                 </div>
@@ -413,7 +467,7 @@ function App() {
               {/* Dev Cleanup */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'dev_cleanup' ? 'flex' : 'hidden'}`}>
                 <div className="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
-                  <DevCleanupView onDelete={handleSmartDelete} onUpgrade={() => setUpgradeBenefit('developer cleanup')} onSizeChange={setDevCleanupSize} />
+                  <DevCleanupView scanResult={scanResult} onDelete={handleSmartDelete} onUpgrade={() => setUpgradeBenefit('developer cleanup')} onItemsChange={setDevDirectories} />
                 </div>
               </div>
 </div>
@@ -453,8 +507,8 @@ function App() {
 
         {/* Trash Modal Overlay */}
         {isTrashOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="w-[500px] max-h-[80vh] flex flex-col glass border border-red-500/30 rounded-2xl shadow-2xl shadow-red-900/20 animate-in zoom-in-95 duration-200 overflow-hidden">
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200 p-4">
+            <div className="w-full max-w-125 max-h-[80vh] flex flex-col glass border border-red-500/30 rounded-2xl shadow-2xl shadow-red-900/20 animate-in zoom-in-95 duration-200 overflow-hidden">
               {/* Modal Header */}
               <div className="flex justify-between items-center p-4 border-b border-white/10 bg-black/20">
                 <div className="flex items-center space-x-2 text-red-400">
