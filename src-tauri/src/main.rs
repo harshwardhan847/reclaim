@@ -21,6 +21,7 @@ const SUMMARY_NODE_BUDGET: i64 = 15_000;
 const LARGE_FILE_THRESHOLD: u64 = 100 * 1024 * 1024;
 const LICENSE_SERVICE: &str = "com.reclaim.app.license";
 const DODO_API_BASE: &str = "https://live.dodopayments.com";
+const PRICE_API_URL: &str = "https://reclaimmac.store/api/price";
 
 const DEV_DIR_TARGETS: &[(&str, &str)] = &[
     ("node_modules", "Node Modules"),
@@ -772,6 +773,35 @@ fn get_license_state() -> LicenseState {
     current_license_state()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalizedPrice {
+    amount: f64,
+    currency: String,
+    country: String,
+    #[serde(default)]
+    fallback: bool,
+}
+
+// Reuses the same server-side geo-priced lookup the website's pricing page
+// uses (see reclaim_website/lib/price.ts) rather than talking to Dodo
+// Payments directly -- that keeps the merchant API key off every installed
+// copy of this app and off the wire between users' machines and Dodo.
+#[tauri::command]
+fn get_localized_price() -> Result<LocalizedPrice, String> {
+    let output = Command::new("curl")
+        .args(["-sS", "--max-time", "8", PRICE_API_URL])
+        .output()
+        .map_err(|e| format!("Network request failed: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    serde_json::from_slice::<LocalizedPrice>(&output.stdout)
+        .map_err(|e| format!("Invalid price response: {e}"))
+}
+
 #[tauri::command]
 fn open_checkout_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://checkout.dodopayments.com/") {
@@ -1197,6 +1227,7 @@ fn main() {
             search_files,
             find_duplicates,
             get_license_state,
+            get_localized_price,
             open_checkout_url,
             activate_license,
             validate_license,

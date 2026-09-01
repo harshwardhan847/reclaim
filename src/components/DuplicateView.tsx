@@ -176,7 +176,7 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, onUpgrade }: 
   }, [selectedPaths, pathSizeMap])
 
   return (
-    <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full">
+    <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full min-h-0">
       <div className="p-6 border-b border-white/5 flex items-center justify-between bg-black/20">
         <div className="flex items-center space-x-4">
           <div className="p-3 bg-primary/20 rounded-xl text-primary border border-primary/30">
@@ -228,7 +228,7 @@ function DuplicateView({ scanResult, onDelete, onWastedSizeChange, onUpgrade }: 
         </Button>
       </div>
 
-      <div className="overflow-auto flex-1 p-2 custom-scrollbar">
+      <div className="overflow-auto flex-1 min-h-0 p-2 custom-scrollbar">
         {!hasRun && !loading && (
           <div className="flex flex-col items-center justify-center h-48">
             <Copy size={40} className="text-neutral-600 mb-4" />

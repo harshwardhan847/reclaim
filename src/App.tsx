@@ -255,7 +255,7 @@ function App() {
         onSearch={() => setIsSearchOpen(true)}
         onRescan={() => handleScan()}
       >
-        <div className="flex flex-col h-full relative">
+        <div className="flex flex-col h-full min-h-0 relative">
         <SearchOverlay
           data={scanResult}
           isOpen={isSearchOpen}
@@ -322,13 +322,13 @@ function App() {
           )}
 
           {activeTab === 'settings' && (
-            <div className="flex-1 pb-4 h-full overflow-y-auto">
+            <div className="flex-1 min-h-0 pb-4 h-full overflow-y-auto">
             <SettingsView onLicenseChange={setLicense} />
             </div>
           )}
 
           {activeTab === 'system_info' && (
-            <div className="flex-1 pb-4 h-full overflow-y-auto">
+            <div className="flex-1 min-h-0 pb-4 h-full overflow-y-auto">
               <SystemInfoView />
             </div>
           )}
@@ -350,17 +350,17 @@ function App() {
 
               {/* Finder View */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'list' ? 'flex' : 'hidden'}`}>
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between mb-4 shrink-0">
                   <h3 className="text-xl font-semibold">Disk Explorer</h3>
                 </div>
-                <div className="h-full border border-white/5 rounded-xl overflow-hidden glass">
+                <div className="flex-1 min-h-0 border border-white/5 rounded-xl overflow-hidden glass">
                    <FileListView data={scanResult} onUpgrade={() => setUpgradeBenefit('Finder reveal and file actions')} />
                 </div>
               </div>
 
               {/* Smart Clean Views (Kept mounted, toggled via CSS to prevent re-renders) */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'duplicates' ? 'flex' : 'hidden'}`}>
-                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                <div className="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
                   <DuplicateView
                   scanResult={scanResult}
                   onDelete={handleSmartDelete}
@@ -372,7 +372,7 @@ function App() {
               </div>
 
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'large_files' ? 'flex' : 'hidden'}`}>
-                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                <div className="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
                   <SmartCleanView
                   title="Large Files"
                   description="Files larger than 100MB taking up significant space."
@@ -386,7 +386,7 @@ function App() {
               </div>
 
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'ai_cache' ? 'flex' : 'hidden'}`}>
-                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                <div className="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
                   <AiCacheView
                   items={aiCaches ?? []}
                   onDelete={handleSmartDelete}
@@ -397,7 +397,7 @@ function App() {
               </div>
 
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'leftovers' ? 'flex' : 'hidden'}`}>
-                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                <div className="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
                   <SmartCleanView
                   title="App Leftovers"
                   description="Data from applications you no longer have installed."
@@ -412,7 +412,7 @@ function App() {
 
               {/* Dev Cleanup */}
               <div className={`flex-1 flex flex-col min-h-0 pb-4 ${activeTab === 'dev_cleanup' ? 'flex' : 'hidden'}`}>
-                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                <div className="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
                   <DevCleanupView onDelete={handleSmartDelete} onUpgrade={() => setUpgradeBenefit('developer cleanup')} onSizeChange={setDevCleanupSize} />
                 </div>
               </div>

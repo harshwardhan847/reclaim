@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Button } from './ui/button'
 import { invoke } from '@tauri-apps/api/core'
 import { Check, Crown, KeyRound, Loader2, X } from 'lucide-react'
+import { useLocalizedPrice } from '@/hooks/useLocalizedPrice'
 
 const checkoutUrl = import.meta.env.VITE_DODO_CHECKOUT_URL || 'https://checkout.dodopayments.com/buy/RECLAIM_PRODUCT_ID'
 
@@ -12,6 +13,7 @@ export function UpgradeModal({ benefit, onClose, onActivated }: { benefit: strin
   const [key, setKey] = useState('')
   const [activating, setActivating] = useState(false)
   const [error, setError] = useState('')
+  const { formatted: localizedPrice } = useLocalizedPrice()
 
   const activate = async () => {
     setActivating(true); setError('')
@@ -40,7 +42,9 @@ export function UpgradeModal({ benefit, onClose, onActivated }: { benefit: strin
             ['Stay safe and in control', 'Review every selection first; cleanup moves items to the Trash so they remain recoverable.'],
           ].map(([title, copy]) => <div key={title} className="flex gap-3"><Check size={16} className="mt-0.5 shrink-0 text-emerald-400" /><div><p className="font-semibold text-white">{title}</p><p className="mt-0.5 text-xs text-neutral-500">{copy}</p></div></div>)}
         </div>
-        <Button onClick={() => invoke('open_checkout_url', { url: checkoutUrl }).catch(err => alert(String(err)))} className="mt-6 h-12 w-full bg-primary text-white hover:bg-primary/90">Get Lifetime Access</Button>
+        <Button onClick={() => invoke('open_checkout_url', { url: checkoutUrl }).catch(err => alert(String(err)))} className="mt-6 h-12 w-full bg-primary text-white hover:bg-primary/90">
+          Get Lifetime Access{localizedPrice ? ` · ${localizedPrice}` : ''}
+        </Button>
         <div className="my-5 flex items-center gap-3 text-[11px] uppercase tracking-[.2em] text-neutral-600"><div className="h-px flex-1 bg-white/10" />Already purchased?<div className="h-px flex-1 bg-white/10" /></div>
         <div className="flex gap-2">
           <div className="relative flex-1"><KeyRound size={16} className="absolute left-3 top-3 text-neutral-600" /><input value={key} onChange={e => setKey(e.target.value)} onKeyDown={e => e.key === 'Enter' && activate()} placeholder="Paste license key" className="h-11 w-full rounded-xl border border-white/10 bg-white/[.04] pl-9 pr-3 text-sm text-white outline-none focus:border-primary/60" /></div>

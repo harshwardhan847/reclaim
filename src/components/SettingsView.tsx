@@ -72,7 +72,7 @@ export function SettingsView({ onLicenseChange }: { onLicenseChange?: (state: Li
   }
 
   return (
-    <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full">
+    <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full min-h-0">
       <div className="p-6 border-b border-white/5 bg-black/20">
         <div className="flex items-center space-x-4">
           <div className="p-3 bg-primary/20 rounded-xl text-primary border border-primary/30">
@@ -85,7 +85,7 @@ export function SettingsView({ onLicenseChange }: { onLicenseChange?: (state: Li
         </div>
       </div>
       
-      <div className="flex-1 overflow-auto p-8">
+      <div className="flex-1 min-h-0 overflow-auto p-8">
         <div className="max-w-2xl">
           <section className="mb-8 p-5 rounded-2xl border border-white/10 bg-white/[.03]">
             <div className="flex items-start justify-between gap-4">

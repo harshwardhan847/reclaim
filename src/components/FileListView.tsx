@@ -91,7 +91,7 @@ function FileListView({ data, onUpgrade }: { data?: ScanNode | null; onUpgrade?:
   }
 
   return (
-    <div className="relative glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full max-h-[600px]">
+    <div className="relative glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full min-h-0">
       
       {/* Breadcrumb Navigation */}
       <div className="p-3 border-b border-white/5 flex items-center bg-black/20 overflow-x-auto custom-scrollbar space-x-2">
@@ -134,7 +134,7 @@ function FileListView({ data, onUpgrade }: { data?: ScanNode | null; onUpgrade?:
       </div>
       
       {/* File List */}
-      <div className="overflow-auto flex-1 p-2">
+      <div className="overflow-auto flex-1 min-h-0 p-2">
         <Table>
           <TableHeader>
             <TableRow className="border-white/5 hover:bg-transparent">

@@ -134,7 +134,7 @@ function AiCacheView({ items, onDelete, onUpgrade }: AiCacheViewProps) {
   }, [selected, items])
 
   return (
-    <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full">
+    <div className="glass rounded-2xl overflow-hidden border border-white/10 shadow-2xl flex flex-col h-full min-h-0">
       {/* Header */}
       <div className="p-6 border-b border-white/5 flex items-center justify-between bg-black/20">
         <div className="flex items-center space-x-4">
@@ -177,7 +177,7 @@ function AiCacheView({ items, onDelete, onUpgrade }: AiCacheViewProps) {
       </div>
       
       {/* File List */}
-      <div className="overflow-auto flex-1 p-2 custom-scrollbar">
+      <div className="overflow-auto flex-1 min-h-0 p-2 custom-scrollbar">
         {groups.length === 0 && (
           <div className="flex flex-col items-center justify-center h-48 text-neutral-500">
             <CheckCircle2 size={48} className="mb-4 text-green-500/50" />
