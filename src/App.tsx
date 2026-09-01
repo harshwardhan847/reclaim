@@ -127,6 +127,7 @@ function App() {
     setDuplicateItems(null)
     setDevDirectories(null)
     setScanBadges({ largeFilesSize: 0, aiCacheSize: 0 })
+    setScanResult(null)
 
     const targetPath = overrideTarget || scanTarget;
     try {
