@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
@@ -471,12 +471,6 @@ async fn scan_path(
     exclusions: Option<Vec<String>>,
 ) -> Result<ScanSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sizes: HashMap<PathBuf, u64> = HashMap::new();
-        let mut dirs: HashSet<PathBuf> = HashSet::new();
-        let mut dir_children: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-        let mut total_scanned_bytes = 0u64;
-        let mut total_files = 0u32;
-
         let mut exclusions_list = exclusions.unwrap_or_default();
 
         // Add macOS default exclusions to prevent APFS firmlink loops and external mount double-counting
@@ -500,9 +494,34 @@ async fn scan_path(
 
         let exclusions_for_walk = exclusions_list.clone();
 
-        for entry in jwalk::WalkDir::new(&path)
+        // jwalk already reads sibling directories in parallel on its own
+        // worker pool -- process_read_dir (below) runs on that pool, which is
+        // how the exclusion filtering used to run off the main thread. But
+        // `DirEntry::metadata()` never caches (it calls fs::metadata/
+        // symlink_metadata fresh on every call), so previously stat-ing each
+        // file in the single-threaded consumer loop after the walk meant
+        // every stat syscall ran serially no matter how parallel jwalk's
+        // directory reads were. Doing the stat + bookkeeping here instead --
+        // merging into shared maps with one lock per directory batch, not
+        // per file -- lets stat syscalls for sibling directories actually
+        // fire concurrently, which is the dominant cost of a full-disk scan.
+        #[derive(Default)]
+        struct ScanAccum {
+            sizes: HashMap<PathBuf, u64>,
+            dirs: HashSet<PathBuf>,
+            dir_children: HashMap<PathBuf, Vec<PathBuf>>,
+            total_scanned_bytes: u64,
+            total_files: u32,
+            last_emitted_files: u32,
+        }
+
+        let accum = Arc::new(Mutex::new(ScanAccum::default()));
+        let accum_for_walk = accum.clone();
+        let window_for_walk = window.clone();
+
+        let walker = jwalk::WalkDir::new(&path)
             .skip_hidden(false)
-            .process_read_dir(move |_depth, _path, _read_dir_state, children| {
+            .process_read_dir(move |_depth, dir_path, _read_dir_state, children| {
                 children.retain(|child_result| {
                     if let Ok(ref child) = child_result {
                         let child_path = child.path();
@@ -512,38 +531,57 @@ async fn scan_path(
                         true
                     }
                 });
-            })
-        {
-            if let Ok(entry) = entry {
-                // entry.path() reconstructs the PathBuf from scratch on every
-                // call -- calling it once and deriving `parent` from that
-                // (instead of a second independent entry.path() call) roughly
-                // halves the path-building cost of this loop, which runs
-                // once per file/dir on the whole scanned subtree.
-                let current = entry.path();
-                let parent = current.parent().map(|p| p.to_path_buf());
 
-                if entry.file_type().is_dir() {
-                    dirs.insert(current.clone());
-                } else if entry.file_type().is_file() {
-                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                    sizes.insert(current.clone(), size);
-                    total_scanned_bytes += size;
-                    total_files += 1;
+                let mut local_dirs = Vec::new();
+                let mut local_sizes: Vec<(PathBuf, u64)> = Vec::new();
+                let mut local_children = Vec::with_capacity(children.len());
+                let mut batch_bytes = 0u64;
+                let mut batch_files = 0u32;
+
+                for child_result in children.iter() {
+                    if let Ok(child) = child_result {
+                        let child_path = child.path();
+                        if child.file_type().is_dir() {
+                            local_dirs.push(child_path.clone());
+                        } else if child.file_type().is_file() {
+                            let size = child.metadata().map(|m| m.len()).unwrap_or(0);
+                            local_sizes.push((child_path.clone(), size));
+                            batch_bytes += size;
+                            batch_files += 1;
+                        }
+                        local_children.push(child_path);
+                    }
                 }
 
-                // `current` isn't needed after this, so move it instead of
-                // cloning a third time.
-                if let Some(parent_path) = parent {
-                    dir_children.entry(parent_path).or_default().push(current);
+                let mut acc = accum_for_walk.lock().unwrap();
+                acc.dirs.extend(local_dirs);
+                acc.sizes.extend(local_sizes);
+                if !local_children.is_empty() {
+                    acc.dir_children.entry(dir_path.to_path_buf()).or_default().extend(local_children);
                 }
+                acc.total_scanned_bytes += batch_bytes;
+                acc.total_files += batch_files;
 
-                // Emit progress every 1000 files to avoid spamming the UI thread
-                if total_files > 0 && total_files % 1000 == 0 {
-                    let _ = window.emit("scan_progress", total_scanned_bytes);
+                // Emit progress roughly every 1000 files, same cadence as before.
+                if acc.total_files.saturating_sub(acc.last_emitted_files) >= 1000 {
+                    acc.last_emitted_files = acc.total_files;
+                    let _ = window_for_walk.emit("scan_progress", acc.total_scanned_bytes);
                 }
-            }
-        }
+            });
+
+        // All the real work happens in process_read_dir above; this just
+        // drains the iterator to drive jwalk's traversal to completion.
+        for _ in walker {}
+
+        let (dirs, sizes, dir_children, total_scanned_bytes) = {
+            let mut acc = accum.lock().unwrap();
+            (
+                std::mem::take(&mut acc.dirs),
+                std::mem::take(&mut acc.sizes),
+                std::mem::take(&mut acc.dir_children),
+                acc.total_scanned_bytes,
+            )
+        };
 
         // Final progress emit
         let _ = window.emit("scan_progress", total_scanned_bytes);
