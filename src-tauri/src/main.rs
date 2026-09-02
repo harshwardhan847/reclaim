@@ -258,28 +258,49 @@ fn file_name_of(p: &Path) -> String {
         .unwrap_or_else(|| p.to_string_lossy().into_owned())
 }
 
-fn ends_with_hidden_segment(lower_path: &str) -> bool {
-    match lower_path.rsplit('/').next() {
+// Case-insensitive substring search that never allocates. is_ai_cache_path
+// and get_leftover_candidates both run this over every path in a full-disk
+// scan (potentially millions), so allocating a lowercased copy of the whole
+// path per call -- as this used to do via `.to_lowercase()` -- was the
+// single biggest cost in both commands. `needle` is expected to already be
+// lowercase (all call sites below pass a literal).
+fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() {
+        return true;
+    }
+    if n.len() > h.len() {
+        return false;
+    }
+    h.windows(n.len())
+        .any(|w| w.iter().zip(n).all(|(&a, &b)| a.to_ascii_lowercase() == b))
+}
+
+// `last[1..]` chars being alphanumeric/underscore/hyphen is case-independent,
+// so this never needed the lowercased path in the first place.
+fn ends_with_hidden_segment(path: &str) -> bool {
+    match path.rsplit('/').next() {
         Some(last) if last.len() > 1 && last.starts_with('.') => last[1..]
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-'),
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
         _ => false,
     }
 }
 
-fn is_ai_cache_path(lower_path: &str) -> bool {
-    let is_cache_dir = lower_path.contains("/.cache/")
-        || lower_path.contains("/library/caches/")
-        || lower_path.contains("/library/application support/")
-        || lower_path.contains("/.config/")
-        || lower_path.contains("/.local/share/")
-        || ends_with_hidden_segment(lower_path);
+fn is_ai_cache_path(path: &str) -> bool {
+    let is_cache_dir = contains_ignore_case(path, "/.cache/")
+        || contains_ignore_case(path, "/library/caches/")
+        || contains_ignore_case(path, "/library/application support/")
+        || contains_ignore_case(path, "/.config/")
+        || contains_ignore_case(path, "/.local/share/")
+        || ends_with_hidden_segment(path);
 
     if !is_cache_dir {
         return false;
     }
 
-    AI_CACHE_KEYWORDS.iter().any(|k| lower_path.contains(k))
+    AI_CACHE_KEYWORDS.iter().any(|k| contains_ignore_case(path, k))
 }
 
 fn is_protected_path(path_str: &str) -> bool {
@@ -494,8 +515,13 @@ async fn scan_path(
             })
         {
             if let Ok(entry) = entry {
-                let parent = entry.path().parent().map(|p| p.to_path_buf());
+                // entry.path() reconstructs the PathBuf from scratch on every
+                // call -- calling it once and deriving `parent` from that
+                // (instead of a second independent entry.path() call) roughly
+                // halves the path-building cost of this loop, which runs
+                // once per file/dir on the whole scanned subtree.
                 let current = entry.path();
+                let parent = current.parent().map(|p| p.to_path_buf());
 
                 if entry.file_type().is_dir() {
                     dirs.insert(current.clone());
@@ -506,8 +532,10 @@ async fn scan_path(
                     total_files += 1;
                 }
 
+                // `current` isn't needed after this, so move it instead of
+                // cloning a third time.
                 if let Some(parent_path) = parent {
-                    dir_children.entry(parent_path).or_default().push(current.clone());
+                    dir_children.entry(parent_path).or_default().push(current);
                 }
 
                 // Emit progress every 1000 files to avoid spamming the UI thread
@@ -532,7 +560,7 @@ async fn scan_path(
         let large_files_size: u64 = sizes.values().copied().filter(|&s| s > LARGE_FILE_THRESHOLD).sum();
         let ai_cache_paths: HashSet<PathBuf> = sizes
             .iter()
-            .filter(|(p, _)| is_ai_cache_path(&p.to_string_lossy().to_lowercase()))
+            .filter(|(p, _)| is_ai_cache_path(&p.to_string_lossy()))
             .map(|(p, _)| p.clone())
             .collect();
         let ai_cache_size: u64 = ai_cache_paths.iter().map(|p| *sizes.get(p).unwrap_or(&0)).sum();
@@ -667,11 +695,16 @@ async fn get_leftover_candidates(app_handle: tauri::AppHandle, installed_apps: V
             .iter()
             .filter_map(|(path, &size)| {
                 let path_str = path.to_string_lossy();
-                let lower = path_str.to_lowercase();
-                if lower.contains("/com.apple.") {
+                // Cheap, allocation-free rejects first -- this runs over
+                // every path in a full-disk scan, and only a tiny fraction
+                // live under Library/Application Support or Library/Caches,
+                // so checking that before doing any case-insensitive work
+                // (which used to lowercase the *entire* path unconditionally)
+                // skips the expensive part for almost every entry.
+                if !path_str.contains("Library/Application Support") && !path_str.contains("Library/Caches") {
                     return None;
                 }
-                if !path_str.contains("Library/Application Support") && !path_str.contains("Library/Caches") {
+                if contains_ignore_case(&path_str, "/com.apple.") {
                     return None;
                 }
                 let app_name = path_str.split('/').find(|p| p.contains(".app") || p.contains("com."))?;
@@ -713,15 +746,21 @@ async fn search_files(app_handle: tauri::AppHandle, query: String, limit: usize)
         const SCAN_CAP: usize = 5000;
         let mut matches: Vec<ScanNode> = Vec::new();
 
+        // Borrowed &str file names + an allocation-free case-insensitive
+        // match, instead of allocating both a filename String and a
+        // lowercased copy of it for every entry -- this scans the whole
+        // index (up to millions of entries) on every keystroke until it
+        // hits SCAN_CAP matches, so per-entry allocation is what made typing
+        // in search feel slow on a big scan.
         for (path, &size) in index.sizes.iter() {
             if matches.len() >= SCAN_CAP {
                 break;
             }
-            let name = file_name_of(path);
-            if name.to_lowercase().contains(&q) {
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            if contains_ignore_case(name, &q) {
                 matches.push(ScanNode {
                     path: path.to_string_lossy().into_owned(),
-                    name,
+                    name: name.to_string(),
                     size,
                     is_dir: false,
                     children: None,
@@ -734,11 +773,11 @@ async fn search_files(app_handle: tauri::AppHandle, query: String, limit: usize)
             if matches.len() >= SCAN_CAP {
                 break;
             }
-            let name = file_name_of(path);
-            if name.to_lowercase().contains(&q) {
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            if contains_ignore_case(name, &q) {
                 matches.push(ScanNode {
                     path: path.to_string_lossy().into_owned(),
-                    name,
+                    name: name.to_string(),
                     size: *index.dir_sizes.get(path).unwrap_or(&0),
                     is_dir: true,
                     children: None,
@@ -1234,7 +1273,18 @@ fn collect_dev_dirs(
         if !index.dirs.contains(child) {
             continue;
         }
-        let dir_name = file_name_of(child);
+
+        // Borrowed &str view of the file name -- unlike file_name_of, this
+        // doesn't allocate a String for every directory in the scanned tree
+        // (this function recurses into virtually all of them). We only pay
+        // for an owned String below once we've actually found a match, which
+        // is the rare case. Non-UTF8 names (essentially never on macOS) just
+        // recurse past, matching the previous behavior for anything that
+        // wouldn't equal one of our all-ASCII target names anyway.
+        let Some(dir_name) = child.file_name().and_then(|n| n.to_str()) else {
+            collect_dev_dirs(child, index, out);
+            continue;
+        };
 
         // Cargo.toml presence is answered from the already-scanned file
         // list (a HashMap lookup) instead of a fresh disk stat.
@@ -1248,7 +1298,7 @@ fn collect_dev_dirs(
         if let Some(cat) = category {
             out.push(DevDirectory {
                 path: child.to_string_lossy().into_owned(),
-                name: dir_name,
+                name: dir_name.to_string(),
                 size: *index.dir_sizes.get(child).unwrap_or(&0),
                 category: cat.to_string(),
             });
