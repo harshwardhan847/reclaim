@@ -826,7 +826,50 @@ async fn find_duplicates(app_handle: tauri::AppHandle, min_size: u64) -> Result<
             })
             .collect();
 
-        Ok(results)
+        // Split each true-duplicate group into what's actually safe to offer
+        // for one-click cleanup: media files are considered duplicates
+        // wherever they live, but non-media files only count as duplicates
+        // when they share a parent directory (e.g. two unrelated projects
+        // both vendoring the same package.json would otherwise false-positive).
+        // Doing this classification here -- on the blocking-thread-pool side,
+        // already parallelized input -- means the frontend never runs this
+        // loop over a potentially huge path list on its own single UI thread.
+        const MEDIA_EXTS: &[&str] = &[
+            "jpg", "jpeg", "png", "gif", "bmp", "webp", "mp4", "mov", "avi", "mkv",
+            "mp3", "wav", "aac", "m4a", "flac",
+        ];
+        fn ext_of(path: &str) -> Option<String> {
+            Path::new(path).extension().map(|e| e.to_string_lossy().to_lowercase())
+        }
+        fn parent_of(path: &str) -> String {
+            Path::new(path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+        }
+
+        let mut classified: Vec<DuplicateGroup> = Vec::new();
+        for group in results {
+            let (media_paths, non_media_paths): (Vec<String>, Vec<String>) = group
+                .paths
+                .into_iter()
+                .partition(|p| ext_of(p).is_some_and(|e| MEDIA_EXTS.contains(&e.as_str())));
+
+            if media_paths.len() > 1 {
+                classified.push(DuplicateGroup { size: group.size, paths: media_paths });
+            }
+
+            let mut by_parent: HashMap<String, Vec<String>> = HashMap::new();
+            for p in non_media_paths {
+                by_parent.entry(parent_of(&p)).or_default().push(p);
+            }
+            for (_, paths) in by_parent {
+                if paths.len() > 1 {
+                    classified.push(DuplicateGroup { size: group.size, paths });
+                }
+            }
+        }
+
+        classified.sort_by_key(|g| std::cmp::Reverse(g.size));
+        classified.truncate(MAX_FLAT_RESULTS);
+        Ok(classified)
     })
     .await
     .unwrap_or_else(|_| Err("Background task failed".to_string()))

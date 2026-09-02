@@ -18,7 +18,7 @@ import { SystemInfoView } from '@/components/SystemInfoView'
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UpgradeModal } from '@/components/UpgradeModal'
-import { Trash2, AlertCircle, X, HardDrive, AppWindow, Map as MapIcon, Sparkles } from 'lucide-react'
+import { Trash2, AlertCircle, X, HardDrive, AppWindow, Map as MapIcon, Sparkles, Loader2 } from 'lucide-react'
 
 interface ScanSummary {
   tree: ScanNode
@@ -74,6 +74,7 @@ function App() {
   const [confirmDelete, setConfirmDelete] = useState<{ paths: string[], size: number } | null>(null)
   const [isInitializing, setIsInitializing] = useState(true)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isDeletingStaged, setIsDeletingStaged] = useState(false)
   const [scanTarget, setScanTarget] = useState<string>('')
   const { license, setLicense } = usePro()
   const [upgradeBenefit, setUpgradeBenefit] = useState<string | null>(null)
@@ -284,6 +285,7 @@ function App() {
   const handleConfirmDelete = async () => {
     if (!license?.canUsePaidFeatures) { alert('Activate your Reclaim license to clean files.'); return }
     const paths = stagedDeletes.map(n => n.path)
+    setIsDeletingStaged(true)
     try {
       const result = await invoke<DeleteResult>('move_to_trash', { paths })
       applyDeleteResult(result)
@@ -296,6 +298,8 @@ function App() {
     } catch (err) {
       console.error(err)
       alert(`Error deleting: ${err}`)
+    } finally {
+      setIsDeletingStaged(false)
     }
   }
 
@@ -614,8 +618,9 @@ function App() {
                   <h3 className="font-bold text-lg">Trash Cart</h3>
                 </div>
                 <button
-                  onClick={() => setIsTrashOpen(false)}
-                  className="p-1 hover:bg-white/10 rounded-lg transition-colors text-gray-400 hover:text-white"
+                  onClick={() => !isDeletingStaged && setIsTrashOpen(false)}
+                  disabled={isDeletingStaged}
+                  className="p-1 hover:bg-white/10 rounded-lg transition-colors text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   <X size={20} />
                 </button>
@@ -635,7 +640,8 @@ function App() {
                       </span>
                       <button
                         onClick={() => handleRemoveStaged(item.path)}
-                        className="text-gray-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors"
+                        disabled={isDeletingStaged}
+                        className="text-gray-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                         title="Remove from cart"
                       >
                         <X size={16} />
@@ -653,9 +659,10 @@ function App() {
                 <Button
                   variant="destructive"
                   onClick={handleConfirmDelete}
-                  className="bg-red-600 hover:bg-red-700 text-white font-semibold shadow-lg shadow-red-900/50 px-6"
+                  disabled={isDeletingStaged}
+                  className="bg-red-600 hover:bg-red-700 text-white font-semibold shadow-lg shadow-red-900/50 px-6 disabled:opacity-60"
                 >
-                  Move to Trash
+                  {isDeletingStaged ? <span className="inline-flex items-center gap-2"><Loader2 size={16} className="animate-spin" /> Moving to Trash...</span> : 'Move to Trash'}
                 </Button>
               </div>
             </div>

@@ -49,53 +49,13 @@ function DuplicateView({ scanResult, onDelete, deletedPaths, onItemsChange, onUp
     setDuplicateGroups([])
     setSelectedPaths(new Set())
 
-    // Yield to the browser so the loading spinner actually appears before we freeze the main thread
-    await new Promise(resolve => setTimeout(resolve, 50))
-
     try {
-      // Grouping by size and hashing both happen server-side against the
-      // already-scanned index -- no re-walk, no flattening the tree in JS.
-      const trueDuplicates: DuplicateGroupResult[] = await invoke('find_duplicates', { minSize: MIN_DUPLICATE_SIZE })
-
-      const mediaExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.mp4', '.mov', '.avi', '.mkv', '.mp3', '.wav', '.aac', '.m4a', '.flac'])
-      const finalDuplicates: DuplicateGroupResult[] = []
-
-      for (const group of trueDuplicates) {
-        const mediaPaths = group.paths.filter(p => {
-          const idx = p.lastIndexOf('.')
-          if (idx === -1) return false
-          const ext = p.substring(idx).toLowerCase()
-          return mediaExts.has(ext)
-        })
-
-        const nonMediaPaths = group.paths.filter(p => {
-          const idx = p.lastIndexOf('.')
-          if (idx === -1) return true
-          const ext = p.substring(idx).toLowerCase()
-          return !mediaExts.has(ext)
-        })
-
-        // Media files are considered duplicates anywhere
-        if (mediaPaths.length > 1) {
-          finalDuplicates.push({ size: group.size, paths: mediaPaths })
-        }
-
-        // Non-media files MUST be in the same parent directory to be considered duplicates
-        const parentMap = new Map<string, string[]>()
-        for (const p of nonMediaPaths) {
-          const parentDir = p.substring(0, p.lastIndexOf('/'))
-          if (!parentMap.has(parentDir)) parentMap.set(parentDir, [])
-          parentMap.get(parentDir)!.push(p)
-        }
-
-        for (const pathsInSameDir of parentMap.values()) {
-          if (pathsInSameDir.length > 1) {
-            finalDuplicates.push({ size: group.size, paths: pathsInSameDir })
-          }
-        }
-      }
-
-      finalDuplicates.sort((a, b) => b.size - a.size) // largest first
+      // Grouping by size, hashing, media-vs-same-directory classification,
+      // sorting and capping the result count all happen server-side (Rust,
+      // off the UI thread) against the already-scanned index -- the frontend
+      // just renders what comes back instead of re-walking/re-grouping a
+      // potentially huge path list on the single JS thread.
+      const finalDuplicates: DuplicateGroupResult[] = await invoke('find_duplicates', { minSize: MIN_DUPLICATE_SIZE })
       setDuplicateGroups(finalDuplicates)
     } catch (err) {
       console.error("Error finding duplicates:", err)
