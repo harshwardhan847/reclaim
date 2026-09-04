@@ -1,0 +1,6 @@
+# core-js is a transitive dependency of posthog-js. Its postinstall script
+# is only an OSS-sponsorship message, not a real build step, so it's safe
+# to deny -- this also avoids pnpm's interactive "approve builds" prompt,
+# which fails CI (`pnpm install --frozen-lockfile`) with ERR_PNPM_IGNORED_BUILDS.
+allowBuilds:
+  core-js: false
