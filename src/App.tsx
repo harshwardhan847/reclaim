@@ -19,6 +19,8 @@ import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal'
 import { UpdateBanner } from '@/components/UpdateBanner'
 import { UpgradeModal } from '@/components/UpgradeModal'
 import { Trash2, AlertCircle, X, HardDrive, AppWindow, Map as MapIcon, Sparkles, Loader2 } from 'lucide-react'
+import { track } from '@/lib/analytics'
+import { ANALYTICS_EVENTS } from '@/lib/constants'
 
 interface ScanSummary {
   tree: ScanNode
@@ -116,6 +118,10 @@ function App() {
   // just trashed instead of the parent needing to know their internals.
   const [lastDeletedPaths, setLastDeletedPaths] = useState<string[]>([])
 
+  useEffect(() => {
+    track(ANALYTICS_EVENTS.APP_LAUNCHED)
+  }, [])
+
   // Listen for Cmd+K globally
   useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -190,6 +196,8 @@ function App() {
     setScanResult(null)
 
     const targetPath = overrideTarget || scanTarget;
+    const startedAt = Date.now()
+    track(ANALYTICS_EVENTS.SCAN_STARTED, { target: targetPath, isPro: !!license?.canUsePaidFeatures })
     try {
       let exclusions = [];
       const saved = localStorage.getItem('reclaim_exclusions');
@@ -203,6 +211,11 @@ function App() {
       })
       setScanResult(result.tree)
       setScanBadges({ largeFilesSize: result.largeFilesSize, aiCacheSize: result.aiCacheSize })
+      track(ANALYTICS_EVENTS.SCAN_COMPLETED, {
+        target: targetPath,
+        totalSizeBytes: result.tree.size,
+        durationMs: Date.now() - startedAt,
+      })
 
     } catch (err) {
       console.error(err)
@@ -289,6 +302,11 @@ function App() {
     try {
       const result = await invoke<DeleteResult>('move_to_trash', { paths })
       applyDeleteResult(result)
+      track(ANALYTICS_EVENTS.CLEANUP_COMPLETED, {
+        source: 'trash_cart',
+        itemCount: result.deletedPaths.length,
+        errorCount: result.errors.length,
+      })
       setIsTrashOpen(false)
       if (result.errors.length > 0) {
         alert(`Moved ${result.deletedPaths.length} item(s) to trash. ${result.errors.length} failed:\n${result.errors.join('\n')}`)
@@ -315,6 +333,11 @@ function App() {
     try {
       const result = await invoke<DeleteResult>('move_to_trash', { paths: confirmDelete.paths })
       applyDeleteResult(result)
+      track(ANALYTICS_EVENTS.CLEANUP_COMPLETED, {
+        source: 'smart_clean',
+        itemCount: result.deletedPaths.length,
+        errorCount: result.errors.length,
+      })
       // Delay alert slightly so UI updates first
       setTimeout(() => {
         if (result.errors.length > 0) {

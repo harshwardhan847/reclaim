@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from './ui/button'
 import { invoke } from '@tauri-apps/api/core'
 import { Check, Crown, KeyRound, Loader2, X } from 'lucide-react'
 import { useLocalizedPrice } from '@/hooks/useLocalizedPrice'
-
-const checkoutUrl = import.meta.env.VITE_DODO_CHECKOUT_URL || 'https://checkout.dodopayments.com/buy/RECLAIM_PRODUCT_ID'
+import { track } from '@/lib/analytics'
+import { ANALYTICS_EVENTS, CHECKOUT_URL } from '@/lib/constants'
 
 type ActivatedLicense = { canUsePaidFeatures: boolean; status: string; maskedKey?: string }
 
@@ -15,13 +15,22 @@ export function UpgradeModal({ benefit, onClose, onActivated }: { benefit: strin
   const [error, setError] = useState('')
   const { formatted: localizedPrice } = useLocalizedPrice()
 
+  useEffect(() => {
+    track(ANALYTICS_EVENTS.UPGRADE_MODAL_VIEWED, { benefit })
+  }, [benefit])
+
   const activate = async () => {
     setActivating(true); setError('')
+    track(ANALYTICS_EVENTS.LICENSE_ACTIVATE_ATTEMPTED, { source: 'upgrade_modal' })
     try {
       const state = await invoke<ActivatedLicense>('activate_license', { key })
+      track(ANALYTICS_EVENTS.LICENSE_ACTIVATED, { source: 'upgrade_modal' })
       onActivated?.(state)
       onClose()
-    } catch (err) { setError(String(err)) }
+    } catch (err) {
+      setError(String(err))
+      track(ANALYTICS_EVENTS.LICENSE_ACTIVATION_FAILED, { source: 'upgrade_modal', error: String(err) })
+    }
     finally { setActivating(false) }
   }
 
@@ -42,7 +51,7 @@ export function UpgradeModal({ benefit, onClose, onActivated }: { benefit: strin
             ['Stay safe and in control', 'Review every selection first; cleanup moves items to the Trash so they remain recoverable.'],
           ].map(([title, copy]) => <div key={title} className="flex gap-3"><Check size={16} className="mt-0.5 shrink-0 text-emerald-400" /><div><p className="font-semibold text-white">{title}</p><p className="mt-0.5 text-xs text-neutral-500">{copy}</p></div></div>)}
         </div>
-        <Button onClick={() => invoke('open_checkout_url', { url: checkoutUrl }).catch(err => alert(String(err)))} className="mt-6 h-12 w-full bg-primary text-white hover:bg-primary/90">
+        <Button onClick={() => { track(ANALYTICS_EVENTS.CHECKOUT_OPENED, { source: 'upgrade_modal', benefit }); invoke('open_checkout_url', { url: CHECKOUT_URL }).catch(err => alert(String(err))) }} className="mt-6 h-12 w-full bg-primary text-white hover:bg-primary/90">
           Get Lifetime Access{localizedPrice ? ` · ${localizedPrice}` : ''}
         </Button>
         <div className="my-5 flex items-center gap-3 text-[11px] uppercase tracking-[.2em] text-neutral-600"><div className="h-px flex-1 bg-white/10" />Already purchased?<div className="h-px flex-1 bg-white/10" /></div>

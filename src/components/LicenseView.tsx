@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { Button } from './ui/button'
 import { CheckCircle2, KeyRound, Loader2, ExternalLink } from 'lucide-react'
 import { useLocalizedPrice } from '@/hooks/useLocalizedPrice'
+import { track } from '@/lib/analytics'
+import { ANALYTICS_EVENTS, CHECKOUT_URL } from '@/lib/constants'
 
 export type LicenseState = {
   status: string
@@ -12,8 +14,6 @@ export type LicenseState = {
   canUsePaidFeatures: boolean
   message?: string
 }
-
-const checkoutUrl = import.meta.env.VITE_DODO_CHECKOUT_URL || 'https://checkout.dodopayments.com/buy/RECLAIM_PRODUCT_ID'
 
 export function LicenseView({ onChange }: { onChange?: (state: LicenseState) => void }) {
   const [state, setState] = useState<LicenseState | null>(null)
@@ -32,16 +32,25 @@ export function LicenseView({ onChange }: { onChange?: (state: LicenseState) => 
 
   const activate = async () => {
     setBusy(true); setError('')
+    track(ANALYTICS_EVENTS.LICENSE_ACTIVATE_ATTEMPTED, { source: 'settings' })
     try {
       const next = await invoke<LicenseState>('activate_license', { key })
+      track(ANALYTICS_EVENTS.LICENSE_ACTIVATED, { source: 'settings' })
       setState(next); onChange?.(next); setKey('')
-    } catch (err) { setError(String(err)) }
+    } catch (err) {
+      setError(String(err))
+      track(ANALYTICS_EVENTS.LICENSE_ACTIVATION_FAILED, { source: 'settings', error: String(err) })
+    }
     finally { setBusy(false) }
   }
 
   const deactivate = async () => {
     setBusy(true); setError('')
-    try { await invoke('deactivate_license'); await refresh() }
+    try {
+      await invoke('deactivate_license')
+      track(ANALYTICS_EVENTS.LICENSE_DEACTIVATED)
+      await refresh()
+    }
     catch (err) { setError(String(err)) }
     finally { setBusy(false) }
   }
@@ -72,7 +81,7 @@ export function LicenseView({ onChange }: { onChange?: (state: LicenseState) => 
           </div>
           <div className="mt-3 flex items-center justify-between text-sm">
             <span className="text-neutral-500">{localizedPrice ? `One-time purchase · ${localizedPrice}` : 'One-time purchase'}</span>
-            <button onClick={() => invoke('open_checkout_url', { url: checkoutUrl }).catch(err => setError(String(err)))} className="text-primary hover:text-primary/80 inline-flex items-center gap-1">Buy a license <ExternalLink size={13} /></button>
+            <button onClick={() => { track(ANALYTICS_EVENTS.CHECKOUT_OPENED, { source: 'settings' }); invoke('open_checkout_url', { url: CHECKOUT_URL }).catch(err => setError(String(err))) }} className="text-primary hover:text-primary/80 inline-flex items-center gap-1">Buy a license <ExternalLink size={13} /></button>
           </div>
         </>
       )}

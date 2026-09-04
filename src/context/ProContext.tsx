@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import type { LicenseState } from '@/components/LicenseView'
+import { identifyLicense } from '@/lib/analytics'
 
 interface ProContextValue {
   isPro: boolean
@@ -33,6 +34,7 @@ export function ProProvider({ children }: { children: ReactNode }) {
     statusRef.current = state?.status || ''
     setIsPro(isProRef.current)
     setLicenseState(state)
+    if (isProRef.current) identifyLicense(state.maskedKey)
   }
 
   useEffect(() => {
