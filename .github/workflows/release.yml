@@ -40,6 +40,12 @@ jobs:
           # produced and the in-app updater has nothing to install.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # PostHog analytics -- read at Vite build time (src/lib/constants.ts),
+          # so it must be present here rather than in .env.local (gitignored,
+          # never reaches the runner). Not a secret in the security sense (it's
+          # a write-only client key, same as posthog-js in any browser bundle)
+          # but it still needs to come from somewhere other than committed code.
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
           # macOS code signing + notarization -- DELIBERATELY DISABLED for now
           # (shipping unsigned until the Apple Developer ID Application
           # certificate is set up). Producing an unsigned build is the
