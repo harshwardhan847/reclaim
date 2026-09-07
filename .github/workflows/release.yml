@@ -46,22 +46,21 @@ jobs:
           # a write-only client key, same as posthog-js in any browser bundle)
           # but it still needs to come from somewhere other than committed code.
           VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
-          # macOS code signing + notarization -- DELIBERATELY DISABLED for now
-          # (shipping unsigned until the Apple Developer ID Application
-          # certificate is set up). Producing an unsigned build is the
-          # correct end state as long as these are unset -- do not set them
-          # to empty-but-present secrets, that's what caused the
-          # "failed to import keychain certificate" failure last time.
+          # macOS code signing + notarization via the Developer ID Application
+          # certificate. tauri-action imports APPLE_CERTIFICATE into a temporary
+          # keychain, signs the .app/.dmg with hardened runtime, then submits to
+          # Apple's notary service and staples the ticket.
           #
-          # To re-enable: uncomment these six lines, add the matching
-          # secrets in GitHub (Settings -> Secrets and variables -> Actions),
-          # and push a new tag. No other changes needed.
-          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # All six must be present and non-empty. If you ever need to ship
+          # unsigned again, comment the whole block out -- do NOT leave the
+          # secrets defined but empty, that's what caused the
+          # "failed to import keychain certificate" failure previously.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Reclaim ${{ github.ref_name }}"
